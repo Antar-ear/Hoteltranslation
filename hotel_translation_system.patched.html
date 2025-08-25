@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hotel Translation System</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2em;
+            margin-bottom: 10px;
+            font-weight: 600;
+        }
+        
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
+        
+        .role-selector {
+            padding: 30px;
+            text-align: center;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .role-buttons {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            margin-top: 20px;
+        }
+        
+        .role-btn {
+            padding: 15px 30px;
+            border: 2px solid #667eea;
+            background: white;
+            color: #667eea;
+            border-radius: 50px;
+            font-size: 1.1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .role-btn:hover {
+            background: #667eea;
+            color: white;
+            transform: translateY(-2px);
+        }
+        
+        .role-btn.active {
+            background: #667eea;
+            color: white;
+        }
+        
+        .main-content {
+            padding: 30px;
+            display: none;
+        }
+        
+        .main-content.active {
+            display: block;
+        }
+        
+        .hotel-setup {
+            text-align: center;
+        }
+        
+        .hotel-input {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #eee;
+            border-radius: 10px;
+            font-size: 1.1em;
+            margin: 20px 0;
+        }
+        
+        .generate-btn {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 50px;
+            font-size: 1.1em;
+            cursor: pointer;
+            transition: transform 0.3s ease;
+        }
+        
+        .generate-btn:hover {
+            transform: translateY(-2px);
+        }
+        
+        .qr-container {
+            margin: 30px 0;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 15px;
+            display: none;
+        }
+        
+        .qr-container.active {
+            display: block;
+        }
+        
+        .translation-interface {
+            text-align: center;
+        }
+        
+        .room-id {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 30px;
+            font-family: monospace;
+            font-size: 1.2em;
+            font-weight: bold;
+        }
+        
+        .record-container {
+            margin: 30px 0;
+        }
+        
+        .record-btn {
+            width: 120px;
+            height: 120px;
+            border: none;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #ff6b6b, #ee5a52);
+            color: white;
+            font-size: 1.2em;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 10px 20px rgba(255, 107, 107, 0.3);
+        }
+        
+        .record-btn:hover {
+            transform: scale(1.05);
+        }
+        
+        .record-btn.recording {
+            background: linear-gradient(135deg, #ff4757, #ff3838);
+            animation: pulse 1s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+        
+        .language-selector {
+            margin: 20px 0;
+        }
+        
+        .language-select {
+            padding: 10px 15px;
+            border: 2px solid #eee;
+            border-radius: 10px;
+            font-size: 1em;
+            width: 200px;
+        }
+        
+        .messages {
+            max-height: 400px;
+            overflow-y: auto;
+            border: 1px solid #eee;
+            border-radius: 15px;
+            padding: 20px;
+            margin: 20px 0;
+            background: #f8f9fa;
+        }
+        
+        .message {
+            margin: 15px 0;
+            padding: 15px;
+            border-radius: 12px;
+            animation: slideIn 0.3s ease;
+        }
+        
+        .message.guest {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+        }
+        
+        .message.receptionist {
+            background: #e8f5e8;
+            border-left: 4px solid #4caf50;
+        }
+        
+        .message-header {
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #555;
+            font-size: 0.9em;
+        }
+        
+        .original-text {
+            font-size: 1.1em;
+            margin-bottom: 8px;
+        }
+        
+        .translated-text {
+            font-style: italic;
+            color: #666;
+        }
+        
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .status {
+            padding: 10px;
+            border-radius: 8px;
+            margin: 10px 0;
+            font-weight: 500;
+        }
+        
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        .status.info {
+            background: #cce7ff;
+            color: #004085;
+        }
+        
+        .text-input-container {
+            margin: 20px 0;
+        }
+        
+        .text-input {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #eee;
+            border-radius: 10px;
+            font-size: 1em;
+            resize: vertical;
+            min-height: 80px;
+        }
+        
+        .send-btn {
+            background: linear-gradient(135deg, #4caf50, #45a049);
+            color: white;
+            border: none;
+            padding: 12px 25px;
+            border-radius: 8px;
+            font-size: 1em;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        
+        .admin-section {
+            border-top: 1px solid #eee;
+            padding-top: 30px;
+            margin-top: 30px;
+        }
+        
+        .connection-status {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            font-weight: bold;
+        }
+        
+        .connection-status.connected {
+            background: #4caf50;
+            color: white;
+        }
+        
+        .connection-status.disconnected {
+            background: #ff4757;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="connection-status" id="connectionStatus">Disconnected</div>
+    
+    <div class="container">
+        <div class="header">
+            <h1>🏨 Hotel Translation</h1>
+            <p>Real-time communication across languages</p>
+        </div>
+        
+        <div class="role-selector" id="roleSelector">
+            <h3>Select Your Role</h3>
+            <div class="role-buttons">
+                <button class="role-btn" onclick="selectRole('admin')">🔧 Admin</button>
+                <button class="role-btn" onclick="selectRole('guest')">👤 Guest</button>
+                <button class="role-btn" onclick="selectRole('receptionist')">🏨 Receptionist</button>
+            </div>
+        </div>
+        
+        <!-- Admin Panel -->
+        <div class="main-content" id="adminContent">
+            <div class="hotel-setup">
+                <h3>Hotel Admin Panel</h3>
+                <input type="text" id="hotelName" class="hotel-input" placeholder="Enter hotel name">
+                <br>
+                <button class="generate-btn" onclick="generateQR()">Generate QR Code</button>
+                
+                <div class="qr-container" id="qrContainer">
+                    <h4>QR Code for Guests</h4>
+                    <div id="qrCode"></div>
+                    <p>Room ID: <span id="generatedRoomId"></span></p>
+                    <p>Guest URL: <span id="guestUrl"></span></p>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Guest Interface -->
+        <div class="main-content" id="guestContent">
+            <div class="translation-interface">
+                <h3>Guest Interface</h3>
+                <div class="room-id">Room: <span id="guestRoomId">-</span></div>
+                
+                <div class="language-selector">
+                    <label>Your Language:</label>
+                    <select id="guestLanguage" class="language-select">
+                        <option value="hi-IN">Hindi (हिन्दी)</option>
+                        <option value="bn-IN">Bengali (বাংলা)</option>
+                        <option value="ta-IN">Tamil (தமிழ்)</option>
+                        <option value="te-IN">Telugu (తెలుగు)</option>
+                        <option value="mr-IN">Marathi (मराठी)</option>
+                        <option value="gu-IN">Gujarati (ગુજરાતી)</option>
+                        <option value="kn-IN">Kannada (ಕನ್ನಡ)</option>
+                        <option value="ml-IN">Malayalam (മലയാളം)</option>
+                        <option value="pa-IN">Punjabi (ਪੰਜਾਬੀ)</option>
+                        <option value="or-IN">Odia (ଓଡ଼ିଆ)</option>
+                    </select>
+                </div>
+                
+                <div class="record-container">
+                    <button class="record-btn" id="guestRecordBtn" onclick="toggleRecording('guest')">
+                        🎤 Speak
+                    </button>
+                </div>
+                
+                <div class="text-input-container">
+                    <textarea id="guestTextInput" class="text-input" placeholder="Or type your message here..."></textarea>
+                    <button class="send-btn" onclick="sendTextMessage('guest')">Send Text</button>
+                </div>
+                
+                <div id="guestStatus"></div>
+                <div class="messages" id="guestMessages"></div>
+            </div>
+        </div>
+        
+        <!-- Receptionist Interface -->
+        <div class="main-content" id="receptionistContent">
+            <div class="translation-interface">
+                <h3>Receptionist Interface</h3>
+                <div class="room-id">Room: <span id="receptionistRoomId">-</span></div>
+                
+                <div class="record-container">
+                    <button class="record-btn" id="receptionistRecordBtn" onclick="toggleRecording('receptionist')">
+                        🎤 Speak (English)
+                    </button>
+                </div>
+                
+                <div class="text-input-container">
+                    <textarea id="receptionistTextInput" class="text-input" placeholder="Type your response in English..."></textarea>
+                    <button class="send-btn" onclick="sendTextMessage('receptionist')">Send Text</button>
+                </div>
+                
+                <div id="receptionistStatus"></div>
+                <div class="messages" id="receptionistMessages"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global variables
+        let socket = null;
+        let currentRole = null;
+        let currentRoom = null;
+        let mediaRecorder = null;
+        let audioChunks = [];
+        let isRecording = false;
+        
+        // Initialize socket connection
+        function initSocket() {
+            // For demo purposes, using a mock WebSocket connection
+            // In production, this would connect to your actual server
+            socket = {
+                emit: function(event, data) {
+                    console.log('Emitting:', event, data);
+                    // Mock response for demo
+                    setTimeout(() => this.mockResponse(event, data), 1000);
+                },
+                on: function(event, callback) {
+                    console.log('Listening for:', event);
+                    this.callbacks = this.callbacks || {};
+                    this.callbacks[event] = callback;
+                },
+                mockResponse: function(event, data) {
+                    if (event === 'join_room') {
+                        this.callbacks?.room_joined?.({ room: data.room, role: data.role });
+                        updateConnectionStatus(true);
+                    } else if (event === 'audio_message' || event === 'text_message') {
+                        // Mock translation response
+                        const mockTranslation = this.getMockTranslation(data);
+                        this.callbacks?.translation?.(mockTranslation);
+                    }
+                },
+                getMockTranslation: function(data) {
+                    const mockTranslations = {
+                        'कितना पैसा?': 'How much money?',
+                        'Rs 3000': 'Rs 3000',
+                        'Thank you': 'धन्यवाद',
+                        'Hello': 'नमस्ते',
+                        'Good morning': 'सुप्रभात'
+                    };
+                    
+                    return {
+                        original: data.text || data.original || 'Sample text',
+                        translated: mockTranslations[data.text] || 'Sample translation',
+                        speaker: data.role || 'guest',
+                        language: data.language || 'hi-IN'
+                    };
+                }
+            };
+            
+            socket.on('translation', handleTranslation);
+            socket.on('room_joined', handleRoomJoined);
+            socket.on('user_joined', handleUserJoined);
+        }
+        
+        function updateConnectionStatus(connected) {
+            const statusEl = document.getElementById('connectionStatus');
+            statusEl.textContent = connected ? 'Connected' : 'Disconnected';
+            statusEl.className = 'connection-status ' + (connected ? 'connected' : 'disconnected');
+        }
+        
+        function selectRole(role) {
+            currentRole = role;
+            
+            // Update active button
+            document.querySelectorAll('.role-btn').forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+            
+            // Hide role selector and show appropriate content
+            document.getElementById('roleSelector').style.display = 'none';
+            document.querySelectorAll('.main-content').forEach(content => content.classList.remove('active'));
+            document.getElementById(role + 'Content').classList.add('active');
+            
+            // Initialize socket connection
+            if (!socket) {
+                initSocket();
+            }
+            
+            // Handle room joining based on role
+            if (role === 'guest' || role === 'receptionist') {
+                const urlParams = new URLSearchParams(window.location.search);
+                const roomId = urlParams.get('room');
+                if (roomId) {
+                    joinRoom(roomId);
+                } else {
+                    showStatus(role, 'Please scan QR code or enter room ID', 'error');
+                }
+            }
+        }
+        
+        function generateQR() {
+            const hotelName = document.getElementById('hotelName').value.trim();
+            if (!hotelName) {
+                alert('Please enter a hotel name');
+                return;
+            }
+            
+            const roomId = 'room_' + Math.random().toString(36).substr(2, 9);
+            const baseUrl = window.location.origin + window.location.pathname;
+            const guestUrl = baseUrl + '?room=' + roomId;
+            
+            // Show QR container
+            document.getElementById('qrContainer').classList.add('active');
+            document.getElementById('generatedRoomId').textContent = roomId;
+            document.getElementById('guestUrl').textContent = guestUrl;
+            
+            // Generate QR code (mock for demo)
+            document.getElementById('qrCode').innerHTML = 
+                `<div style="width: 200px; height: 200px; background: #f0f0f0; border: 2px dashed #ccc; 
+                display: flex; align-items: center; justify-content: center; margin: 20px auto;">
+                <span style="text-align: center;">QR Code<br>Room: ${roomId}</span></div>`;
+            
+            currentRoom = roomId;
+        }
+        
+        function joinRoom(roomId) {
+            currentRoom = roomId;
+
+            // Update UI
+            if (currentRole === 'guest') {
+                document.getElementById('guestRoomId').textContent = roomId;
+            } else if (currentRole === 'receptionist') {
+                document.getElementById('receptionistRoomId').textContent = roomId;
+            }
+
+            const language = currentRole === 'guest' ? document.getElementById('guestLanguage').value : 'en-IN';
+            socket.emit('join_room', { room: roomId, role: currentRole, language });
+            showStatus(currentRole, 'Connecting to room...', 'info');
+        }
+        
+        function handleRoomJoined(data) {
+            showStatus(currentRole, `Connected to room: ${data.room}`, 'success');
+        }
+        
+        function handleUserJoined(data) {
+            showStatus(currentRole, `${data.role} joined the conversation`, 'info');
+        }
+        
+        function showStatus(role, message, type) {
+            const statusEl = document.getElementById(role + 'Status');
+            statusEl.innerHTML = `<div class="status ${type}">${message}</div>`;
+            setTimeout(() => statusEl.innerHTML = '', 5000);
+        }
+        
+        async function toggleRecording(role) {
+            const recordBtn = document.getElementById(role + 'RecordBtn');
+            
+            if (!isRecording) {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    mediaRecorder = new MediaRecorder(stream);
+                    audioChunks = [];
+                    
+                    mediaRecorder.ondataavailable = event => {
+                        audioChunks.push(event.data);
+                    };
+                    
+                    mediaRecorder.onstop = () => {
+                        const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                        processAudio(audioBlob, role);
+                        stream.getTracks().forEach(track => track.stop());
+                    };
+                    
+                    mediaRecorder.start();
+                    isRecording = true;
+                    recordBtn.classList.add('recording');
+                    recordBtn.textContent = '🔴 Recording...';
+                    
+                } catch (error) {
+                    showStatus(role, 'Microphone access denied', 'error');
+                }
+            } else {
+                mediaRecorder.stop();
+                isRecording = false;
+                recordBtn.classList.remove('recording');
+                recordBtn.textContent = '🎤 Speak';
+            }
+        }
+        
+        function processAudio(audioBlob, role) {
+            showStatus(role, 'Processing audio...', 'info');
+            
+            const language = role === 'guest' ? 
+                document.getElementById('guestLanguage').value : 'en-IN';
+            
+            // Mock audio processing for demo
+            setTimeout(() => {
+                const mockText = role === 'guest' ? 'कितना पैसा?' : 'Rs 3000 per night';
+                
+                socket.emit('audio_message', {
+                    room: currentRoom,
+                    role: role,
+                    language: language,
+                    original: mockText
+                });
+                
+                showStatus(role, 'Message sent!', 'success');
+            }, 1500);
+        }
+        
+        function sendTextMessage(role) {
+            const textInput = document.getElementById(role + 'TextInput');
+            const text = textInput.value.trim();
+            
+            if (!text) return;
+            
+            const language = role === 'guest' ? 
+                document.getElementById('guestLanguage').value : 'en-IN';
+            
+            socket.emit('text_message', {
+                room: currentRoom,
+                role: role,
+                language: language,
+                text: text
+            });
+            
+            textInput.value = '';
+            showStatus(role, 'Message sent!', 'success');
+        }
+        
+        function handleTranslation(data) {
+            // Display message in both guest and receptionist interfaces
+            displayMessage('guest', data);
+            displayMessage('receptionist', data);
+        }
+        
+        function displayMessage(role, data) {
+            const messagesEl = document.getElementById(role + 'Messages');
+            const messageEl = document.createElement('div');
+            messageEl.className = `message ${data.speaker}`;
+            
+            // Show appropriate text based on role
+            let primaryText, secondaryText;
+            if (role === 'guest') {
+                primaryText = data.speaker === 'guest' ? data.original : data.translated;
+                secondaryText = data.speaker === 'guest' ? data.translated : data.original;
+            } else {
+                primaryText = data.speaker === 'receptionist' ? data.original : data.translated;
+                secondaryText = data.speaker === 'receptionist' ? data.translated : data.original;
+            }
+            
+            messageEl.innerHTML = `
+                <div class="message-header">${data.speaker === 'guest' ? 'Guest' : 'Receptionist'}</div>
+                <div class="original-text">${primaryText}</div>
+                ${secondaryText !== primaryText ? `<div class="translated-text">${secondaryText}</div>` : ''}
+            `;
+            
+            messagesEl.appendChild(messageEl);
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+        
+        // Initialize app
+        document.addEventListener('DOMContentLoaded', () => {
+            updateConnectionStatus(false);
+            
+            // Check if there's a room parameter in URL
+            const urlParams = new URLSearchParams(window.location.search);
+            const roomId = urlParams.get('room');
+            if (roomId) {
+                // Auto-show guest/receptionist selection if room is specified
+                document.querySelector('.role-btn[onclick="selectRole(\'guest\')"]').style.display = 'inline-block';
+                document.querySelector('.role-btn[onclick="selectRole(\'receptionist\')"]').style.display = 'inline-block';
+                document.querySelector('.role-btn[onclick="selectRole(\'admin\')"]').style.display = 'none';
+            }
+        });
+        
+        // Handle enter key for text inputs
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' && event.ctrlKey) {
+                if (event.target.id === 'guestTextInput') {
+                    sendTextMessage('guest');
+                } else if (event.target.id === 'receptionistTextInput') {
+                    sendTextMessage('receptionist');
+                }
+            }
+        });
+    </script>
+</body>
+</html>
