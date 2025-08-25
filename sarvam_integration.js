@@ -11,7 +11,9 @@ class SarvamClient {
       'api-subscription-key': apiKey,
       'Content-Type': 'application/json'
     };
-    this.sttModel = process.env.SARVAM_STT_MODEL || 'saaras:v1';
+    // ✅ Use the current STT family & default model from docs
+    // Allowed: saarika:v1 | saarika:v2 | saarika:v2.5 | saarika:flash
+    this.sttModel = process.env.SARVAM_STT_MODEL || 'saarika:v2.5';
     this.speakerGender = process.env.SARVAM_SPEAKER_GENDER || 'Male'; // or 'Female'
     this.toneMode = process.env.SARVAM_TONE || 'formal';              // or 'informal'
   }
@@ -19,7 +21,7 @@ class SarvamClient {
   /**
    * Speech-to-text
    * @param {Buffer} audioBuffer
-   * @param {string} languageCode e.g. 'hi-IN'
+   * @param {string} languageCode e.g. 'hi-IN' (optional for saarika:v2.5)
    * @param {string} mimeType e.g. 'audio/webm', 'audio/ogg', 'audio/wav'
    */
   async transcribe(audioBuffer, languageCode = 'hi-IN', mimeType = 'audio/webm') {
@@ -29,8 +31,8 @@ class SarvamClient {
         mimeType.includes('ogg') ? 'audio.ogg' : 'audio.webm';
 
       const formData = new FormData();
-      // Important: let undici set the multipart boundary; don't set Content-Type yourself.
       formData.append('file', new File([audioBuffer], fileName, { type: mimeType }));
+      // language_code is optional for saarika:v2.5; sending it is fine
       formData.append('language_code', languageCode);
       formData.append('model', this.sttModel);
 
@@ -69,10 +71,11 @@ class SarvamClient {
     try {
       const payload = {
         input: text,
-        source_language_code: sourceLanguage,
+        source_language_code: sourceLanguage, // you can pass 'auto' if you want auto-detect
         target_language_code: targetLanguage,
         speaker_gender: this.speakerGender,
         mode: this.toneMode
+        // Optional: model: 'sarvam-translate:v1' or 'mayura:v1'
       };
 
       const res = await fetch(`${this.baseUrl}/translate`, {
