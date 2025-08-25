@@ -1,178 +1,132 @@
-// sarvam-client.js
-// Real Sarvam API integration
+// sarvam_integration.js
+// Real Sarvam API integration (Node 18+)
+// Requires: npm i undici
 const { FormData, File, fetch } = require('undici');
 
 class SarvamClient {
-    constructor(apiKey) {
-        this.apiKey = apiKey;
-        this.baseUrl = 'https://api.sarvam.ai';
-        this.headers = {
-            'api-subscription-key': apiKey,
-            'Content-Type': 'application/json'
-        };
-    }
+  constructor(apiKey) {
+    this.apiKey = apiKey;
+    this.baseUrl = process.env.SARVAM_BASE_URL || 'https://api.sarvam.ai';
+    this.headersJson = {
+      'api-subscription-key': apiKey,
+      'Content-Type': 'application/json'
+    };
+    this.sttModel = process.env.SARVAM_STT_MODEL || 'saaras:v1';
+    this.speakerGender = process.env.SARVAM_SPEAKER_GENDER || 'Male'; // or 'Female'
+    this.toneMode = process.env.SARVAM_TONE || 'formal';              // or 'informal'
+  }
 
-    /**
-     * Transcribe audio to text using Sarvam Speech-to-Text API
-     * @param {Buffer} audioBuffer - Audio file buffer
-     * @param {string} languageCode - Language code (e.g., 'hi-IN')
-     * @returns {Promise<Object>} Transcription result
-     */
-    async transcribe(audioBuffer, languageCode = 'hi-IN') {
-        try {
-            const formData = new FormData();
-            formData.append('file', new File([audioBuffer], 'audio.wav', { type: 'audio/wav' }));
-            formData.append('language_code', languageCode);
-            formData.append('model', 'saaras:v1');
+  /**
+   * Speech-to-text
+   * @param {Buffer} audioBuffer
+   * @param {string} languageCode e.g. 'hi-IN'
+   * @param {string} mimeType e.g. 'audio/webm', 'audio/ogg', 'audio/wav'
+   */
+  async transcribe(audioBuffer, languageCode = 'hi-IN', mimeType = 'audio/webm') {
+    try {
+      const fileName =
+        mimeType.includes('wav') ? 'audio.wav' :
+        mimeType.includes('ogg') ? 'audio.ogg' : 'audio.webm';
 
-            const response = await fetch(`${this.baseUrl}/speech-to-text`, {
-                method: 'POST',
-                headers: { 'api-subscription-key': this.apiKey },
-                body: formData
-            });
+      const formData = new FormData();
+      // Important: let undici set the multipart boundary; don't set Content-Type yourself.
+      formData.append('file', new File([audioBuffer], fileName, { type: mimeType }));
+      formData.append('language_code', languageCode);
+      formData.append('model', this.sttModel);
 
-            if (!response.ok) {
-                throw new Error(`Sarvam API error: ${response.status} ${response.statusText}`);
-            }
+      const res = await fetch(`${this.baseUrl}/speech-to-text`, {
+        method: 'POST',
+        headers: { 'api-subscription-key': this.apiKey },
+        body: formData
+      });
 
-            const result = await response.json();
-            
-            return {
-                transcript: result.transcript || '',
-                confidence: result.confidence || 0.95,
-                language_code: result.language_code || languageCode,
-                diarized_transcript: result.diarized_transcript || {
-                    entries: [{
-                        speaker_id: 'speaker_1',
-                        text: result.transcript || ''
-                    }]
-                }
-            };
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        throw new Error(`Sarvam STT ${res.status} ${res.statusText} ${body}`);
+      }
 
-        } catch (error) {
-            console.error('Transcription error:', error);
-            throw new Error(`Failed to transcribe audio: ${error.message}`);
+      const result = await res.json();
+      const transcript = result.transcript || '';
+
+      return {
+        transcript,
+        confidence: result.confidence ?? 0.95,
+        language_code: result.language_code || languageCode,
+        diarized_transcript: result.diarized_transcript || {
+          entries: [{ speaker_id: 'speaker_1', text: transcript }]
         }
+      };
+    } catch (err) {
+      console.error('Transcription error:', err);
+      throw new Error(`Failed to transcribe audio: ${err.message}`);
     }
+  }
 
-    /**
-     * Translate text using Sarvam Translation API
-     * @param {string} text - Text to translate
-     * @param {string} sourceLanguage - Source language code
-     * @param {string} targetLanguage - Target language code
-     * @returns {Promise<Object>} Translation result
-     */
-    async translate(text, sourceLanguage, targetLanguage) {
-        try {
-            const payload = {
-                input: text,
-                source_language_code: sourceLanguage,
-                target_language_code: targetLanguage,
-                speaker_gender: 'Male', // or 'Female'
-                mode: 'formal' // or 'informal'
-            };
+  /**
+   * Text translation
+   */
+  async translate(text, sourceLanguage, targetLanguage) {
+    try {
+      const payload = {
+        input: text,
+        source_language_code: sourceLanguage,
+        target_language_code: targetLanguage,
+        speaker_gender: this.speakerGender,
+        mode: this.toneMode
+      };
 
-            const response = await fetch(`${this.baseUrl}/translate`, {
-                method: 'POST',
-                headers: this.headers,
-                body: JSON.stringify(payload)
-            });
+      const res = await fetch(`${this.baseUrl}/translate`, {
+        method: 'POST',
+        headers: this.headersJson,
+        body: JSON.stringify(payload)
+      });
 
-            if (!response.ok) {
-                throw new Error(`Sarvam API error: ${response.status} ${response.statusText}`);
-            }
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        throw new Error(`Sarvam Translate ${res.status} ${res.statusText} ${body}`);
+      }
 
-            const result = await response.json();
-            
-            return {
-                text: result.translated_text || text,
-                source_language: sourceLanguage,
-                target_language: targetLanguage,
-                confidence: result.confidence || 0.95
-            };
-
-        } catch (error) {
-            console.error('Translation error:', error);
-            throw new Error(`Failed to translate text: ${error.message}`);
-        }
+      const result = await res.json();
+      return {
+        text: result.translated_text || text,
+        source_language: sourceLanguage,
+        target_language: targetLanguage,
+        confidence: result.confidence ?? 0.95
+      };
+    } catch (err) {
+      console.error('Translation error:', err);
+      throw new Error(`Failed to translate text: ${err.message}`);
     }
+  }
 
-    /**
-     * Get supported languages
-     * @returns {Promise<Array>} List of supported languages
-     */
-    async getSupportedLanguages() {
-        try {
-            const response = await fetch(`${this.baseUrl}/translate/supported-languages`, {
-                headers: this.headers
-            });
-
-            if (!response.ok) {
-                throw new Error(`Sarvam API error: ${response.status} ${response.statusText}`);
-            }
-
-            return await response.json();
-        } catch (error) {
-            console.error('Error fetching supported languages:', error);
-            return this.getDefaultLanguages();
-        }
+  async getSupportedLanguages() {
+    try {
+      const res = await fetch(`${this.baseUrl}/translate/supported-languages`, {
+        headers: { 'api-subscription-key': this.apiKey }
+      });
+      if (!res.ok) throw new Error(`Sarvam languages ${res.status} ${res.statusText}`);
+      return await res.json();
+    } catch (err) {
+      console.error('Error fetching supported languages:', err);
+      return this.getDefaultLanguages();
     }
+  }
 
-    /**
-     * Get default supported languages (fallback)
-     * @returns {Array} Default language list
-     */
-    getDefaultLanguages() {
-        return [
-            { code: 'hi-IN', name: 'Hindi', native: 'हिन्दी' },
-            { code: 'bn-IN', name: 'Bengali', native: 'বাংলা' },
-            { code: 'ta-IN', name: 'Tamil', native: 'தமிழ்' },
-            { code: 'te-IN', name: 'Telugu', native: 'తెలుగు' },
-            { code: 'mr-IN', name: 'Marathi', native: 'मराठी' },
-            { code: 'gu-IN', name: 'Gujarati', native: 'ગુજરાતી' },
-            { code: 'kn-IN', name: 'Kannada', native: 'ಕನ್ನಡ' },
-            { code: 'ml-IN', name: 'Malayalam', native: 'മലയാളം' },
-            { code: 'pa-IN', name: 'Punjabi', native: 'ਪੰਜਾਬੀ' },
-            { code: 'or-IN', name: 'Odia', native: 'ଓଡ଼ିଆ' },
-            { code: 'en-IN', name: 'English', native: 'English' }
-        ];
-    }
-
-    /**
-     * Health check for Sarvam API
-     * @returns {Promise<boolean>} API health status
-     */
-    async healthCheck() {
-        try {
-            // Test with a simple translation
-            await this.translate('Hello', 'en-IN', 'hi-IN');
-            return true;
-        } catch (error) {
-            console.error('Sarvam API health check failed:', error);
-            return false;
-        }
-    }
-
-    /**
-     * Get API usage statistics (if available)
-     * @returns {Promise<Object>} Usage statistics
-     */
-    async getUsageStats() {
-        try {
-            const response = await fetch(`${this.baseUrl}/usage`, {
-                headers: this.headers
-            });
-
-            if (!response.ok) {
-                throw new Error(`Sarvam API error: ${response.status} ${response.statusText}`);
-            }
-
-            return await response.json();
-        } catch (error) {
-            console.error('Error fetching usage stats:', error);
-            return { error: error.message };
-        }
-    }
+  getDefaultLanguages() {
+    return [
+      { code: 'hi-IN', name: 'Hindi', native: 'हिन्दी' },
+      { code: 'bn-IN', name: 'Bengali', native: 'বাংলা' },
+      { code: 'ta-IN', name: 'Tamil', native: 'தமிழ்' },
+      { code: 'te-IN', name: 'Telugu', native: 'తెలుగు' },
+      { code: 'mr-IN', name: 'Marathi', native: 'मराठी' },
+      { code: 'gu-IN', name: 'Gujarati', native: 'ગુજરાતી' },
+      { code: 'kn-IN', name: 'Kannada', native: 'ಕನ್ನಡ' },
+      { code: 'ml-IN', name: 'Malayalam', native: 'മലയാളം' },
+      { code: 'pa-IN', name: 'Punjabi', native: 'ਪੰਜਾਬੀ' },
+      { code: 'or-IN', name: 'Odia', native: 'ଓଡ଼ିଆ' },
+      { code: 'en-IN', name: 'English', native: 'English' }
+    ];
+  }
 }
 
 module.exports = SarvamClient;
