@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Hotel Translation System</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -57,6 +58,7 @@
             gap: 15px;
             justify-content: center;
             margin-top: 20px;
+            flex-wrap: wrap;
         }
         
         .role-btn {
@@ -291,12 +293,6 @@
             margin-top: 10px;
         }
         
-        .admin-section {
-            border-top: 1px solid #eee;
-            padding-top: 30px;
-            margin-top: 30px;
-        }
-        
         .connection-status {
             position: fixed;
             top: 20px;
@@ -323,16 +319,16 @@
     
     <div class="container">
         <div class="header">
-            <h1>🏨 Hotel Translation</h1>
+            <h1>Hotel Translation</h1>
             <p>Real-time communication across languages</p>
         </div>
         
         <div class="role-selector" id="roleSelector">
             <h3>Select Your Role</h3>
             <div class="role-buttons">
-                <button class="role-btn" onclick="selectRole('admin')">🔧 Admin</button>
-                <button class="role-btn" onclick="selectRole('guest')">👤 Guest</button>
-                <button class="role-btn" onclick="selectRole('receptionist')">🏨 Receptionist</button>
+                <button class="role-btn" onclick="selectRole('admin')">Admin</button>
+                <button class="role-btn" onclick="selectRole('guest')">Guest</button>
+                <button class="role-btn" onclick="selectRole('receptionist')">Receptionist</button>
             </div>
         </div>
         
@@ -345,10 +341,13 @@
                 <button class="generate-btn" onclick="generateQR()">Generate QR Code</button>
                 
                 <div class="qr-container" id="qrContainer">
-                    <h4>QR Code for Guests</h4>
+                    <h4>Scan QR Code</h4>
                     <div id="qrCode"></div>
-                    <p>Room ID: <span id="generatedRoomId"></span></p>
-                    <p>Guest URL: <span id="guestUrl"></span></p>
+                    <p><strong>Room ID:</strong> <span id="generatedRoomId"></span></p>
+                    <p><strong>Guest URL:</strong> <a href="#" id="guestUrlLink" target="_blank"><span id="guestUrl"></span></a></p>
+                    <div style="margin-top: 15px; padding: 10px; background: #e8f4fd; border-radius: 8px; font-size: 0.9em; color: #1976d2;">
+                        <strong>Instructions:</strong> Guests can either scan the QR code with their phone camera or click the URL link above
+                    </div>
                 </div>
             </div>
         </div>
@@ -377,7 +376,7 @@
                 
                 <div class="record-container">
                     <button class="record-btn" id="guestRecordBtn" onclick="toggleRecording('guest')">
-                        🎤 Speak
+                        Speak
                     </button>
                 </div>
                 
@@ -399,7 +398,7 @@
                 
                 <div class="record-container">
                     <button class="record-btn" id="receptionistRecordBtn" onclick="toggleRecording('receptionist')">
-                        🎤 Speak (English)
+                        Speak (English)
                     </button>
                 </div>
                 
@@ -423,52 +422,25 @@
         let audioChunks = [];
         let isRecording = false;
         
-        // Initialize socket connection
+        // Initialize socket connection with real server
         function initSocket() {
-            // For demo purposes, using a mock WebSocket connection
-            // In production, this would connect to your actual server
-            socket = {
-                emit: function(event, data) {
-                    console.log('Emitting:', event, data);
-                    // Mock response for demo
-                    setTimeout(() => this.mockResponse(event, data), 1000);
-                },
-                on: function(event, callback) {
-                    console.log('Listening for:', event);
-                    this.callbacks = this.callbacks || {};
-                    this.callbacks[event] = callback;
-                },
-                mockResponse: function(event, data) {
-                    if (event === 'join_room') {
-                        this.callbacks?.room_joined?.({ room: data.room, role: data.role });
-                        updateConnectionStatus(true);
-                    } else if (event === 'audio_message' || event === 'text_message') {
-                        // Mock translation response
-                        const mockTranslation = this.getMockTranslation(data);
-                        this.callbacks?.translation?.(mockTranslation);
-                    }
-                },
-                getMockTranslation: function(data) {
-                    const mockTranslations = {
-                        'कितना पैसा?': 'How much money?',
-                        'Rs 3000': 'Rs 3000',
-                        'Thank you': 'धन्यवाद',
-                        'Hello': 'नमस्ते',
-                        'Good morning': 'सुप्रभात'
-                    };
-                    
-                    return {
-                        original: data.text || data.original || 'Sample text',
-                        translated: mockTranslations[data.text] || 'Sample translation',
-                        speaker: data.role || 'guest',
-                        language: data.language || 'hi-IN'
-                    };
-                }
-            };
+            socket = io();
+            
+            socket.on('connect', () => {
+                console.log('Connected to server');
+                updateConnectionStatus(true);
+            });
+            
+            socket.on('disconnect', () => {
+                console.log('Disconnected from server');
+                updateConnectionStatus(false);
+            });
             
             socket.on('translation', handleTranslation);
             socket.on('room_joined', handleRoomJoined);
             socket.on('user_joined', handleUserJoined);
+            socket.on('processing_status', handleProcessingStatus);
+            socket.on('error', handleSocketError);
         }
         
         function updateConnectionStatus(connected) {
@@ -506,6 +478,7 @@
             }
         }
         
+        // Generate QR code with backend API call
         function generateQR() {
             const hotelName = document.getElementById('hotelName').value.trim();
             if (!hotelName) {
@@ -513,35 +486,77 @@
                 return;
             }
             
-            const roomId = 'room_' + Math.random().toString(36).substr(2, 9);
-            const baseUrl = window.location.origin + window.location.pathname;
-            const guestUrl = baseUrl + '?room=' + roomId;
+            // Call backend API to generate room
+            fetch('/api/generate-room', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ hotelName })
+            })
+            .then(response => response.json())
+            .then(data => {
+                // Show QR container
+                document.getElementById('qrContainer').classList.add('active');
+                document.getElementById('generatedRoomId').textContent = data.roomId;
+                document.getElementById('guestUrl').textContent = data.guestUrl;
+                document.getElementById('guestUrlLink').href = data.guestUrl;
+                
+                // Generate actual QR code
+                generateQRCode(data.guestUrl, 'qrCode');
+                
+                currentRoom = data.roomId;
+            })
+            .catch(error => {
+                console.error('Error generating room:', error);
+                alert('Failed to generate QR code');
+            });
+        }
+        
+        // Generate actual QR code using QR.js library
+        function generateQRCode(text, elementId) {
+            const qrContainer = document.getElementById(elementId);
+            qrContainer.innerHTML = ''; // Clear previous QR code
             
-            // Show QR container
-            document.getElementById('qrContainer').classList.add('active');
-            document.getElementById('generatedRoomId').textContent = roomId;
-            document.getElementById('guestUrl').textContent = guestUrl;
-            
-            // Generate QR code (mock for demo)
-            document.getElementById('qrCode').innerHTML = 
-                `<div style="width: 200px; height: 200px; background: #f0f0f0; border: 2px dashed #ccc; 
-                display: flex; align-items: center; justify-content: center; margin: 20px auto;">
-                <span style="text-align: center;">QR Code<br>Room: ${roomId}</span></div>`;
-            
-            currentRoom = roomId;
+            try {
+                // Create QR code
+                const qr = qrcode(0, 'M');
+                qr.addData(text);
+                qr.make();
+                
+                // Create QR code as image
+                const qrImage = qr.createImgTag(4, 8);
+                qrContainer.innerHTML = qrImage;
+                
+                // Style the QR code
+                const img = qrContainer.querySelector('img');
+                if (img) {
+                    img.style.border = '10px solid white';
+                    img.style.borderRadius = '10px';
+                    img.style.boxShadow = '0 4px 8px rgba(0,0,0,0.1)';
+                    img.style.display = 'block';
+                    img.style.margin = '0 auto';
+                }
+            } catch (error) {
+                console.error('QR Code generation error:', error);
+                qrContainer.innerHTML = '<p>QR Code generation failed</p>';
+            }
         }
         
         function joinRoom(roomId) {
             currentRoom = roomId;
-
+            
             // Update UI
             if (currentRole === 'guest') {
                 document.getElementById('guestRoomId').textContent = roomId;
             } else if (currentRole === 'receptionist') {
                 document.getElementById('receptionistRoomId').textContent = roomId;
             }
-
-            const language = currentRole === 'guest' ? document.getElementById('guestLanguage').value : 'en-IN';
+            
+            // Join room via socket
+            const language = currentRole === 'guest' ? 
+                document.getElementById('guestLanguage').value : 'en-IN';
+                
             socket.emit('join_room', { room: roomId, role: currentRole, language });
             showStatus(currentRole, 'Connecting to room...', 'info');
         }
@@ -552,6 +567,24 @@
         
         function handleUserJoined(data) {
             showStatus(currentRole, `${data.role} joined the conversation`, 'info');
+        }
+        
+        function handleProcessingStatus(data) {
+            const statusText = {
+                'transcribing': 'Converting speech to text...',
+                'translating': 'Translating...',
+                'complete': 'Translation complete!',
+                'error': 'Processing failed'
+            };
+            
+            const statusType = data.status === 'error' ? 'error' : 'info';
+            if (data.status !== 'complete') {
+                showStatus(currentRole, statusText[data.status] || 'Processing...', statusType);
+            }
+        }
+        
+        function handleSocketError(error) {
+            showStatus(currentRole, `Error: ${error.message}`, 'error');
         }
         
         function showStatus(role, message, type) {
@@ -582,7 +615,7 @@
                     mediaRecorder.start();
                     isRecording = true;
                     recordBtn.classList.add('recording');
-                    recordBtn.textContent = '🔴 Recording...';
+                    recordBtn.textContent = 'Recording...';
                     
                 } catch (error) {
                     showStatus(role, 'Microphone access denied', 'error');
@@ -591,7 +624,7 @@
                 mediaRecorder.stop();
                 isRecording = false;
                 recordBtn.classList.remove('recording');
-                recordBtn.textContent = '🎤 Speak';
+                recordBtn.textContent = role === 'guest' ? 'Speak' : 'Speak (English)';
             }
         }
         
@@ -601,19 +634,19 @@
             const language = role === 'guest' ? 
                 document.getElementById('guestLanguage').value : 'en-IN';
             
-            // Mock audio processing for demo
-            setTimeout(() => {
-                const mockText = role === 'guest' ? 'कितना पैसा?' : 'Rs 3000 per night';
+            // Convert audio blob to base64 for transmission
+            const reader = new FileReader();
+            reader.onload = function() {
+                const audioData = reader.result.split(',')[1]; // Remove data URL prefix
                 
                 socket.emit('audio_message', {
                     room: currentRoom,
                     role: role,
                     language: language,
-                    original: mockText
+                    audioData: audioData
                 });
-                
-                showStatus(role, 'Message sent!', 'success');
-            }, 1500);
+            };
+            reader.readAsDataURL(audioBlob);
         }
         
         function sendTextMessage(role) {
@@ -650,11 +683,11 @@
             // Show appropriate text based on role
             let primaryText, secondaryText;
             if (role === 'guest') {
-                primaryText = data.speaker === 'guest' ? data.original : data.translated;
-                secondaryText = data.speaker === 'guest' ? data.translated : data.original;
+                primaryText = data.speaker === 'guest' ? data.original.text : data.translated.text;
+                secondaryText = data.speaker === 'guest' ? data.translated.text : data.original.text;
             } else {
-                primaryText = data.speaker === 'receptionist' ? data.original : data.translated;
-                secondaryText = data.speaker === 'receptionist' ? data.translated : data.original;
+                primaryText = data.speaker === 'receptionist' ? data.original.text : data.translated.text;
+                secondaryText = data.speaker === 'receptionist' ? data.translated.text : data.original.text;
             }
             
             messageEl.innerHTML = `
