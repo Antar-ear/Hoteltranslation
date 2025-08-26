@@ -13,6 +13,94 @@
             box-sizing: border-box;
         }
         
+        // TTS Functions
+        function toggleTTS(role) {
+            ttsEnabled[role] = !ttsEnabled[role];
+            const toggle = document.getElementById(role + 'TtsToggle');
+            
+            if (ttsEnabled[role]) {
+                toggle.classList.add('active');
+            } else {
+                toggle.classList.remove('active');
+                // Stop any current speech
+                stopTTS();
+            }
+        }
+        
+        function speakText(text, language, role) {
+            if (!ttsEnabled[role] || !text) return;
+            
+            // Stop any current speech
+            stopTTS();
+            
+            // Create new utterance
+            currentUtterance = new SpeechSynthesisUtterance(text);
+            
+            // Set language
+            const langMap = {
+                'hi-IN': 'hi-IN',
+                'bn-IN': 'bn-IN', 
+                'ta-IN': 'ta-IN',
+                'te-IN': 'te-IN',
+                'mr-IN': 'mr-IN',
+                'gu-IN': 'gu-IN',
+                'kn-IN': 'kn-IN',
+                'ml-IN': 'ml-IN',
+                'pa-IN': 'pa-IN',
+                'or-IN': 'or-IN',
+                'en-IN': 'en-US'
+            };
+            
+            currentUtterance.lang = langMap[language] || 'en-US';
+            
+            // Set speech rate from slider
+            const speedSlider = document.getElementById(role + 'Speed');
+            currentUtterance.rate = speedSlider ? parseFloat(speedSlider.value) : 1.0;
+            
+            // Set voice preference (try to find native voice for language)
+            const voices = speechSynthesis.getVoices();
+            const preferredVoice = voices.find(voice => 
+                voice.lang.startsWith(currentUtterance.lang.split('-')[0])
+            );
+            
+            if (preferredVoice) {
+                currentUtterance.voice = preferredVoice;
+            }
+            
+            // Event handlers
+            currentUtterance.onstart = () => {
+                console.log('TTS started:', text);
+            };
+            
+            currentUtterance.onend = () => {
+                console.log('TTS finished');
+                currentUtterance = null;
+            };
+            
+            currentUtterance.onerror = (event) => {
+                console.error('TTS error:', event.error);
+                currentUtterance = null;
+            };
+            
+            // Speak
+            speechSynthesis.speak(currentUtterance);
+        }
+        
+        function stopTTS() {
+            if (speechSynthesis.speaking) {
+                speechSynthesis.cancel();
+            }
+            currentUtterance = null;
+        }
+        
+        function createPlayButton(text, language, role) {
+            const playBtn = document.createElement('button');
+            playBtn.className = 'play-btn';
+            playBtn.innerHTML = '🔊 Play';
+            playBtn.onclick = () => speakText(text, language, role);
+            return playBtn;
+        }
+        
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -292,6 +380,103 @@
             cursor: pointer;
             margin-top: 10px;
         }
+
+        .audio-controls {
+            margin-top: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 15px;
+        }
+
+        .play-btn {
+            background: linear-gradient(135deg, #2196f3, #1976d2);
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            cursor: pointer;
+            transition: transform 0.2s ease;
+        }
+
+        .play-btn:hover {
+            transform: scale(1.05);
+        }
+
+        .play-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .volume-control {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .volume-slider {
+            width: 80px;
+            height: 4px;
+            border-radius: 2px;
+            background: #ddd;
+            outline: none;
+        }
+
+        .tts-settings {
+            margin: 20px 0;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 10px;
+        }
+
+        .tts-toggle {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .toggle-switch {
+            position: relative;
+            width: 50px;
+            height: 24px;
+            background: #ccc;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: background 0.3s ease;
+        }
+
+        .toggle-switch.active {
+            background: #4caf50;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 20px;
+            height: 20px;
+            background: white;
+            border-radius: 50%;
+            transition: transform 0.3s ease;
+        }
+
+        .toggle-switch.active .toggle-slider {
+            transform: translateX(26px);
+        }
+
+        .speed-control {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .speed-slider {
+            width: 100px;
+        }
         
         .connection-status {
             position: fixed;
@@ -396,6 +581,20 @@
                 <h3>Receptionist Interface</h3>
                 <div class="room-id">Room: <span id="receptionistRoomId">-</span></div>
                 
+                <div class="tts-settings">
+                    <div class="tts-toggle">
+                        <label>Audio Playback:</label>
+                        <div class="toggle-switch active" id="receptionistTtsToggle" onclick="toggleTTS('receptionist')">
+                            <div class="toggle-slider"></div>
+                        </div>
+                    </div>
+                    <div class="speed-control">
+                        <label>Speed:</label>
+                        <input type="range" class="speed-slider" id="receptionistSpeed" min="0.5" max="2" step="0.1" value="1">
+                        <span id="receptionistSpeedValue">1.0x</span>
+                    </div>
+                </div>
+                
                 <div class="record-container">
                     <button class="record-btn" id="receptionistRecordBtn" onclick="toggleRecording('receptionist')">
                         Speak (English)
@@ -421,6 +620,14 @@
         let mediaRecorder = null;
         let audioChunks = [];
         let isRecording = false;
+        
+        // TTS variables
+        let ttsEnabled = {
+            guest: true,
+            receptionist: true
+        };
+        let speechSynthesis = window.speechSynthesis;
+        let currentUtterance = null;
         
         // Initialize socket connection with real server
         function initSocket() {
@@ -681,28 +888,71 @@
             messageEl.className = `message ${data.speaker}`;
             
             // Show appropriate text based on role
-            let primaryText, secondaryText;
+            let primaryText, secondaryText, audioLanguage;
             if (role === 'guest') {
                 primaryText = data.speaker === 'guest' ? data.original.text : data.translated.text;
                 secondaryText = data.speaker === 'guest' ? data.translated.text : data.original.text;
+                audioLanguage = data.speaker === 'guest' ? data.original.language : data.translated.language;
             } else {
                 primaryText = data.speaker === 'receptionist' ? data.original.text : data.translated.text;
                 secondaryText = data.speaker === 'receptionist' ? data.translated.text : data.original.text;
+                audioLanguage = data.speaker === 'receptionist' ? data.original.language : data.translated.language;
             }
+            
+            const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
             
             messageEl.innerHTML = `
                 <div class="message-header">${data.speaker === 'guest' ? 'Guest' : 'Receptionist'}</div>
                 <div class="original-text">${primaryText}</div>
                 ${secondaryText !== primaryText ? `<div class="translated-text">${secondaryText}</div>` : ''}
+                <div class="audio-controls">
+                    <button class="play-btn" onclick="speakText('${primaryText.replace(/'/g, "\\'")}', '${audioLanguage}', '${role}')">
+                        🔊 Play
+                    </button>
+                    ${secondaryText !== primaryText ? 
+                        `<button class="play-btn" onclick="speakText('${secondaryText.replace(/'/g, "\\'")}', '${role === 'guest' ? data.original.language : data.translated.language}', '${role}')">
+                            🔊 Translation
+                        </button>` : ''
+                    }
+                    <button class="play-btn" onclick="stopTTS()" style="background: linear-gradient(135deg, #ff6b6b, #ee5a52);">
+                        🔇 Stop
+                    </button>
+                </div>
             `;
             
             messagesEl.appendChild(messageEl);
             messagesEl.scrollTop = messagesEl.scrollHeight;
+            
+            // Auto-play translated text if enabled and this is for the receiving role
+            if (ttsEnabled[role] && data.speaker !== role) {
+                setTimeout(() => {
+                    speakText(primaryText, audioLanguage, role);
+                }, 500); // Small delay to ensure message is visible
+            }
         }
         
         // Initialize app
         document.addEventListener('DOMContentLoaded', () => {
             updateConnectionStatus(false);
+            
+            // Initialize speed control handlers
+            ['guest', 'receptionist'].forEach(role => {
+                const speedSlider = document.getElementById(role + 'Speed');
+                const speedValue = document.getElementById(role + 'SpeedValue');
+                
+                if (speedSlider && speedValue) {
+                    speedSlider.addEventListener('input', (e) => {
+                        speedValue.textContent = parseFloat(e.target.value).toFixed(1) + 'x';
+                    });
+                }
+            });
+            
+            // Load available voices when they're ready
+            if (speechSynthesis.onvoiceschanged !== undefined) {
+                speechSynthesis.onvoiceschanged = () => {
+                    console.log('Available TTS voices loaded:', speechSynthesis.getVoices().length);
+                };
+            }
             
             // Check if there's a room parameter in URL
             const urlParams = new URLSearchParams(window.location.search);
