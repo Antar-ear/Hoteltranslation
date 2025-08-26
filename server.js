@@ -444,7 +444,8 @@ io.on('connection', (socket) => {
             console.log('Processing text message:', {
                 room: data.room,
                 role: data.role,
-                text: data.text
+                text: data.text,
+                language: data.language
             });
             
             const userInfo = userRoles.get(socket.id);
@@ -459,17 +460,40 @@ io.on('connection', (socket) => {
                 speaker: data.role
             });
             
-            // Translate text
+            // Determine languages for translation
             const sourceLanguage = data.language || (data.role === 'guest' ? userInfo.language : 'en-IN');
             const targetLanguage = data.role === 'guest' ? 'en-IN' : userInfo.language || 'hi-IN';
             
-            const translation = await sarvamClient.translate(
-                data.text,
-                sourceLanguage,
-                targetLanguage
-            );
+            console.log('Translation request:', {
+                text: data.text,
+                from: sourceLanguage,
+                to: targetLanguage
+            });
             
-            console.log('Text translation result:', translation.text);
+            // Try translation with detailed error logging
+            let translation;
+            try {
+                translation = await sarvamClient.translate(
+                    data.text,
+                    sourceLanguage,
+                    targetLanguage
+                );
+                console.log('Translation successful:', translation);
+            } catch (translationError) {
+                console.error('Translation failed:', {
+                    error: translationError.message,
+                    stack: translationError.stack,
+                    apiResponse: translationError.response?.data
+                });
+                
+                // Send error to client
+                socket.emit('error', { 
+                    message: `Translation failed: ${translationError.message}`,
+                    details: translationError.response?.data || 'No additional details'
+                });
+                io.to(data.room).emit('processing_status', { status: 'error' });
+                return;
+            }
             
             // Send results to all users in room
             const messageData = {
@@ -487,16 +511,20 @@ io.on('connection', (socket) => {
                     language: targetLanguage,
                     languageName: languageNames[targetLanguage] || targetLanguage
                 },
-                confidence: 1.0, // Text input has perfect confidence
+                confidence: 1.0,
                 speakerId: socket.id,
-                ttsAvailable: true // Indicate TTS is available via API
+                ttsAvailable: true
             };
             
             io.to(data.room).emit('translation', messageData);
             io.to(data.room).emit('processing_status', { status: 'complete' });
             
         } catch (error) {
-            console.error('Text processing error:', error);
+            console.error('Text processing error:', {
+                error: error.message,
+                stack: error.stack,
+                data: data
+            });
             socket.emit('error', { 
                 message: 'Failed to process text message',
                 error: error.message 
