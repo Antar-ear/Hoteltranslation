@@ -23,13 +23,48 @@ const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
 /* ----------------------------- Helper Utils ------------------------------ */
+// short code for Translate (hi, en, …)
 const toSarvamLang = (code = 'en-IN') => (String(code).split('-')[0] || 'en').toLowerCase();
+
+// region code for STT (hi-IN, en-IN, od-IN, unknown)
+const ensureSarvamRegionCode = (code) => {
+  if (!code) return 'unknown';
+  const raw = String(code);
+  const lc = raw.toLowerCase();
+  if (lc === 'auto' || lc === 'unknown') return 'unknown';
+
+  // Sarvam accepted region list from your error log:
+  const allowed = new Set([
+    'unknown', 'hi-IN', 'bn-IN', 'kn-IN', 'ml-IN', 'mr-IN',
+    'od-IN', 'pa-IN', 'ta-IN', 'te-IN', 'en-IN', 'gu-IN'
+  ]);
+  if (allowed.has(raw)) return raw; // already correct (case-sensitive keep)
+
+  const base = lc.split('-')[0];
+  const map = {
+    hi: 'hi-IN', en: 'en-IN', bn: 'bn-IN', kn: 'kn-IN', ml: 'ml-IN',
+    mr: 'mr-IN', pa: 'pa-IN', ta: 'ta-IN', te: 'te-IN', gu: 'gu-IN',
+    // normalize Odia
+    od: 'od-IN', or: 'od-IN'
+  };
+  return map[base] || 'unknown';
+};
+
 const safeJson = (x) => { try { return JSON.stringify(x); } catch { return String(x); } };
 
+// UI names (Odia fixed)
 const languageNames = {
-  'hi-IN': 'Hindi', 'bn-IN': 'Bengali', 'ta-IN': 'Tamil', 'te-IN': 'Telugu',
-  'mr-IN': 'Marathi', 'gu-IN': 'Gujarati', 'kn-IN': 'Kannada', 'ml-IN': 'Malayalam',
-  'pa-IN': 'Punjabi', 'or-IN': 'Odia', 'en-IN': 'English'
+  'hi-IN': 'Hindi',
+  'bn-IN': 'Bengali',
+  'ta-IN': 'Tamil',
+  'te-IN': 'Telugu',
+  'mr-IN': 'Marathi',
+  'gu-IN': 'Gujarati',
+  'kn-IN': 'Kannada',
+  'ml-IN': 'Malayalam',
+  'pa-IN': 'Punjabi',
+  'od-IN': 'Odia',
+  'en-IN': 'English'
 };
 
 /* ---------------------------- Sarvam Clients ----------------------------- */
@@ -45,8 +80,8 @@ class SarvamAIClient {
     const FormData = require('form-data');
     const form = new FormData();
     form.append('file', audioBuffer, { filename: 'audio.wav', contentType: 'audio/wav' });
-    form.append('language_code', toSarvamLang(languageCode));
-    form.append('model', 'saarika:v2.5'); // valid models: v1|v2|v2.5|flash
+    form.append('language_code', ensureSarvamRegionCode(languageCode)); // <— FIX
+    form.append('model', 'saarika:v2.5'); // valid: v1 | v2 | v2.5 | flash
 
     try {
       const res = await this.http.post('/speech-to-text', form, {
@@ -56,7 +91,7 @@ class SarvamAIClient {
       return {
         transcript: t,
         confidence: res.data?.confidence ?? 0.95,
-        language_code: res.data?.language_code || toSarvamLang(languageCode),
+        language_code: res.data?.language_code || ensureSarvamRegionCode(languageCode),
         diarized_transcript: res.data?.diarized_transcript || {
           entries: [{ transcript: t, speaker_id: 'speaker_1', start_time_seconds: 0, end_time_seconds: 0 }]
         }
@@ -98,33 +133,22 @@ class SarvamAIClient {
 }
 
 /* --------------------------- Sarvam TTS (bulbul) -------------------------- */
-/**
- * Uses Sarvam text-to-speech (model: bulbul:v2).
- * The API commonly accepts a JSON payload and returns audio bytes.
- * We request arraybuffer and stream back to the client as audio/mpeg.
- */
 class SarvamTTS {
   constructor(apiKey) {
-    this.apiKey = apiKey;
     this.http = axios.create({
       baseURL: 'https://api.sarvam.ai',
       timeout: 30000,
       headers: { 'api-subscription-key': apiKey, 'Content-Type': 'application/json' }
     });
-    // sensible defaults; tweak per your needs
     this.defaultSampleRate = 22050;
-    this.defaultSpeakerByLang = {
-      'hi-IN': 'anushka',
-      'en-IN': 'meera'
-      // add more language->speaker defaults if needed
-    };
+    this.defaultSpeakerByLang = { 'hi-IN': 'anushka', 'en-IN': 'meera' };
   }
 
   async generateSpeech(text, language = 'hi-IN', opts = {}) {
     const speaker = opts.speaker || this.defaultSpeakerByLang[language] || 'anushka';
     const payload = {
       text: String(text || ''),
-      target_language_code: language,           // Sarvam TTS accepts regioned codes (e.g., hi-IN)
+      target_language_code: ensureSarvamRegionCode(language), // region code
       speaker,
       pitch: opts.pitch ?? 0,
       pace: opts.pace ?? 1,
@@ -135,23 +159,20 @@ class SarvamTTS {
     };
 
     try {
-      // Many TTS APIs return raw audio when asked. Request arraybuffer and pass content-type through.
       const res = await this.http.post('/text-to-speech', payload, { responseType: 'arraybuffer' });
       const contentType = res.headers['content-type'] || 'audio/mpeg';
       return { audio: Buffer.from(res.data), contentType };
     } catch (err) {
-      // If API returns JSON (e.g., base64), handle gracefully
       const data = err.response?.data;
       if (data && data.audio) {
-        const buf = Buffer.from(data.audio, 'base64');
-        return { audio: buf, contentType: 'audio/mpeg' };
+        // fallback if API returns base64 in JSON
+        return { audio: Buffer.from(data.audio, 'base64'), contentType: 'audio/mpeg' };
       }
       console.error('Sarvam TTS error:', data || err.message);
       throw new Error(`TTS generation failed: ${safeJson(data || err.message)}`);
     }
   }
 
-  // simple placeholder list; replace with real voice list if Sarvam exposes one
   async getVoices() {
     return [
       { language: 'hi-IN', speaker: 'anushka' },
@@ -182,7 +203,6 @@ app.post('/api/tts', async (req, res) => {
   try {
     const { text, language = 'hi-IN', speaker, pitch, pace, loudness, sampleRate, enablePreprocessing, model } = req.body || {};
     if (!text || !String(text).trim()) return res.status(400).json({ error: 'Text is required' });
-
     const audio = await sarvamTTS.generateSpeech(text, language, { speaker, pitch, pace, loudness, sampleRate, enablePreprocessing, model });
     res.set({ 'Content-Type': audio.contentType, 'Content-Length': audio.audio.length, 'Cache-Control': 'public, max-age=3600' });
     res.send(audio.audio);
@@ -244,7 +264,6 @@ io.on('connection', (socket) => {
   socket.on('audio_message', async (data = {}) => {
     try {
       const { room, role, language = 'hi-IN', targetLanguage: explicitTarget } = data;
-
       const userInfo = userRoles.get(socket.id);
       if (!userInfo || userInfo.room !== room) return socket.emit('error', { message: 'Not authorized for this room' });
 
@@ -283,7 +302,6 @@ io.on('connection', (socket) => {
   socket.on('text_message', async (data = {}) => {
     try {
       const { room, role, text, language = 'hi-IN', targetLanguage: explicitTarget } = data;
-
       const userInfo = userRoles.get(socket.id);
       if (!userInfo || userInfo.room !== room) return socket.emit('error', { message: 'Not authorized for this room' });
 
