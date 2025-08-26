@@ -569,7 +569,18 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`🏨 Hotel Translation Server running on port ${PORT}`);
     console.log(`📱 Open http://localhost:${PORT} to access the app`);
-    console.log(`🔧 Mock Sarvam API enabled (set SARVAM_KEY for production)`);
+    
+    if (process.env.SARVAM_KEY) {
+        console.log(`🔧 Real Sarvam API initialized`);
+    } else {
+        console.log(`⚠️  Warning: SARVAM_KEY not found - translations may not work`);
+    }
+    
+    if (process.env.SPEECHIFY_API_KEY) {
+        console.log(`🎤 Speechify TTS initialized`);
+    } else {
+        console.log(`⚠️  Warning: SPEECHIFY_API_KEY not found - TTS may not work`);
+    }
 });
 
 // Graceful shutdown
