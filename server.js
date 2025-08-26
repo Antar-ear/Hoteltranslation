@@ -27,70 +27,192 @@ app.use(express.static('public'));
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
 
-// Mock Sarvam API client for development
-// Replace with actual Sarvam API when ready
-class MockSarvamClient {
+// Real Sarvam AI client implementation
+class SarvamAIClient {
     constructor(apiKey) {
         this.apiKey = apiKey;
-        console.log('Mock Sarvam API initialized');
+        this.baseUrl = 'https://api.sarvam.ai';
+        this.headers = {
+            'api-subscription-key': apiKey,
+            'Content-Type': 'application/json'
+        };
     }
 
     async transcribe(audioBuffer, languageCode) {
-        // Mock transcription - in production, use actual Sarvam API
-        const mockTranscriptions = {
-            'hi-IN': 'कितना पैसा?',
-            'bn-IN': 'কত টাকা?',
-            'ta-IN': 'எவ்வளவு பணம்?',
-            'te-IN': 'ఎంత డబ్బు?',
-            'en-IN': 'How much money?'
-        };
-        
-        await this.delay(1000); // Simulate API call
-        
-        return {
-            transcript: mockTranscriptions[languageCode] || 'Sample text',
-            confidence: 0.95,
-            diarized_transcript: {
-                entries: [{
-                    speaker_id: 'speaker_1',
-                    text: mockTranscriptions[languageCode] || 'Sample text'
-                }]
-            }
-        };
+        try {
+            const FormData = require('form-data');
+            const form = new FormData();
+            
+            form.append('file', audioBuffer, {
+                filename: 'audio.wav',
+                contentType: 'audio/wav'
+            });
+            form.append('language_code', languageCode);
+            form.append('model', 'saaras:v1');
+
+            const response = await axios.post(`${this.baseUrl}/speech-to-text`, form, {
+                headers: {
+                    'api-subscription-key': this.apiKey,
+                    ...form.getHeaders()
+                }
+            });
+
+            return {
+                transcript: response.data.transcript || '',
+                confidence: response.data.confidence || 0.95,
+                language_code: response.data.language_code || languageCode,
+                diarized_transcript: response.data.diarized_transcript || {
+                    entries: [{
+                        transcript: response.data.transcript || '',
+                        speaker_id: 'speaker_1',
+                        start_time_seconds: 0,
+                        end_time_seconds: 0
+                    }]
+                }
+            };
+
+        } catch (error) {
+            console.error('Sarvam transcription error:', error.response?.data || error.message);
+            throw new Error(`Failed to transcribe audio: ${error.message}`);
+        }
     }
 
     async translate(text, sourceLanguage, targetLanguage) {
-        // Mock translation - in production, use actual Sarvam API
-        const translations = {
-            'कितना पैसा?': 'How much money?',
-            'How much money?': 'कितना पैसा?',
-            'Rs 3000': 'Rs 3000',
-            'Thank you': 'धन्यवाद',
-            'धन्यवाद': 'Thank you',
-            'Good morning': 'सुप्रभात',
-            'सुप्रभात': 'Good morning',
-            'Hello': 'नमस्ते',
-            'नमस्ते': 'Hello',
-            'I need a room': 'मुझे एक कमरा चाहिए',
-            'मुझे एक कमरा चाहिए': 'I need a room'
-        };
-        
-        await this.delay(800); // Simulate API call
-        
-        return {
-            text: translations[text] || `Translated: ${text}`,
-            source_language: sourceLanguage,
-            target_language: targetLanguage
-        };
+        try {
+            const payload = {
+                input: text,
+                source_language_code: sourceLanguage,
+                target_language_code: targetLanguage,
+                speaker_gender: 'Male',
+                mode: 'formal'
+            };
+
+            const response = await axios.post(`${this.baseUrl}/translate`, payload, {
+                headers: this.headers
+            });
+
+            return {
+                text: response.data.translated_text || text,
+                source_language: sourceLanguage,
+                target_language: targetLanguage,
+                confidence: response.data.confidence || 0.95
+            };
+
+        } catch (error) {
+            console.error('Sarvam translation error:', error.response?.data || error.message);
+            throw new Error(`Failed to translate text: ${error.message}`);
+        }
     }
 
-    delay(ms) {
-        return new Promise(resolve => setTimeout(resolve, ms));
+    async getSupportedLanguages() {
+        try {
+            const response = await axios.get(`${this.baseUrl}/translate/supported-languages`, {
+                headers: this.headers
+            });
+            return response.data;
+        } catch (error) {
+            console.error('Error fetching supported languages:', error);
+            return this.getDefaultLanguages();
+        }
+    }
+
+    getDefaultLanguages() {
+        return [
+            { code: 'hi-IN', name: 'Hindi', native: 'हिन्दी' },
+            { code: 'bn-IN', name: 'Bengali', native: 'বাংলা' },
+            { code: 'ta-IN', name: 'Tamil', native: 'தமிழ்' },
+            { code: 'te-IN', name: 'Telugu', native: 'తెలుగు' },
+            { code: 'mr-IN', name: 'Marathi', native: 'मराठी' },
+            { code: 'gu-IN', name: 'Gujarati', native: 'ગુજરાતી' },
+            { code: 'kn-IN', name: 'Kannada', native: 'ಕನ್ನಡ' },
+            { code: 'ml-IN', name: 'Malayalam', native: 'മലയാളം' },
+            { code: 'pa-IN', name: 'Punjabi', native: 'ਪੰਜਾਬੀ' },
+            { code: 'or-IN', name: 'Odia', native: 'ଓଡ଼ିଆ' },
+            { code: 'en-IN', name: 'English', native: 'English' }
+        ];
+    }
+
+    async healthCheck() {
+        try {
+            await this.translate('Hello', 'en-IN', 'hi-IN');
+            return true;
+        } catch (error) {
+            console.error('Sarvam API health check failed:', error);
+            return false;
+        }
     }
 }
 
-// Initialize Sarvam client
-const sarvamClient = new MockSarvamClient(process.env.SARVAM_KEY);
+// Speechify TTS integration
+class SpeechifyTTS {
+    constructor(apiKey) {
+        this.apiKey = apiKey;
+        this.baseUrl = 'https://api.speechify.com/v1';
+        this.voiceMap = {
+            'hi-IN': 'hi-IN-SwaraNeural',
+            'bn-IN': 'bn-IN-BashkarNeural', 
+            'ta-IN': 'ta-IN-PallaviNeural',
+            'te-IN': 'te-IN-ShrutiNeural',
+            'mr-IN': 'mr-IN-ManoharNeural',
+            'gu-IN': 'gu-IN-DhwaniNeural',
+            'kn-IN': 'kn-IN-SapnaNeural',
+            'ml-IN': 'ml-IN-SobhanaNeural',
+            'pa-IN': 'pa-IN-GaganNeural',
+            'or-IN': 'or-IN-SubhasiniNeural',
+            'en-IN': 'en-IN-NeerjaNeural'
+        };
+    }
+
+    async generateSpeech(text, language = 'en-IN') {
+        try {
+            const voice = this.voiceMap[language] || 'en-IN-NeerjaNeural';
+            
+            const response = await axios.post(`${this.baseUrl}/audio/speech`, {
+                input: text,
+                voice: voice,
+                response_format: 'mp3',
+                speed: 1.0
+            }, {
+                headers: {
+                    'Authorization': `Bearer ${this.apiKey}`,
+                    'Content-Type': 'application/json'
+                },
+                responseType: 'arraybuffer'
+            });
+
+            return {
+                audio: Buffer.from(response.data),
+                contentType: 'audio/mpeg'
+            };
+        } catch (error) {
+            console.error('Speechify TTS error:', error.response?.data || error.message);
+            throw new Error(`TTS generation failed: ${error.message}`);
+        }
+    }
+
+    async getVoices() {
+        try {
+            const response = await axios.get(`${this.baseUrl}/voices`, {
+                headers: {
+                    'Authorization': `Bearer ${this.apiKey}`
+                }
+            });
+            return response.data;
+        } catch (error) {
+            console.error('Error fetching voices:', error);
+            return Object.keys(this.voiceMap).map(lang => ({
+                language: lang,
+                voice: this.voiceMap[lang]
+            }));
+        }
+    }
+}
+
+// Initialize Speechify TTS
+const speechifyTTS = new SpeechifyTTS(process.env.SPEECHIFY_API_KEY || 'MRGSDZNMIHLRc45xijL77miP2DB4AjmYaO3EZ6JyXro=');
+
+// Initialize real Sarvam AI client
+const sarvamClient = new SarvamAIClient(process.env.SARVAM_KEY);
 
 // Replace with actual Sarvam client when ready:
 /*
@@ -128,7 +250,41 @@ app.get('/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Generate room endpoint
+// TTS endpoint
+app.post('/api/tts', async (req, res) => {
+    try {
+        const { text, language = 'en-IN' } = req.body;
+        
+        if (!text) {
+            return res.status(400).json({ error: 'Text is required' });
+        }
+
+        const audioResult = await speechifyTTS.generateSpeech(text, language);
+        
+        res.set({
+            'Content-Type': audioResult.contentType,
+            'Content-Length': audioResult.audio.length,
+            'Cache-Control': 'public, max-age=3600' // Cache for 1 hour
+        });
+        
+        res.send(audioResult.audio);
+        
+    } catch (error) {
+        console.error('TTS endpoint error:', error);
+        res.status(500).json({ error: 'TTS generation failed' });
+    }
+});
+
+// Get available TTS voices
+app.get('/api/tts/voices', async (req, res) => {
+    try {
+        const voices = await speechifyTTS.getVoices();
+        res.json(voices);
+    } catch (error) {
+        console.error('Error fetching TTS voices:', error);
+        res.status(500).json({ error: 'Failed to fetch voices' });
+    }
+});
 app.post('/api/generate-room', (req, res) => {
     const { hotelName } = req.body;
     const roomId = `room_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
@@ -266,7 +422,8 @@ io.on('connection', (socket) => {
                     languageName: languageNames[targetLanguage] || targetLanguage
                 },
                 confidence: transcription.confidence || 0.95,
-                speakerId: transcription.diarized_transcript?.entries?.[0]?.speaker_id || socket.id
+                speakerId: transcription.diarized_transcript?.entries?.[0]?.speaker_id || socket.id,
+                ttsAvailable: true // Indicate TTS is available via API
             };
             
             io.to(data.room).emit('translation', messageData);
@@ -331,7 +488,8 @@ io.on('connection', (socket) => {
                     languageName: languageNames[targetLanguage] || targetLanguage
                 },
                 confidence: 1.0, // Text input has perfect confidence
-                speakerId: socket.id
+                speakerId: socket.id,
+                ttsAvailable: true // Indicate TTS is available via API
             };
             
             io.to(data.room).emit('translation', messageData);
