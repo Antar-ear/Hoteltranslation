@@ -1,6 +1,7 @@
 // sarvam_integration.js
-// Complete Sarvam API integration: STT, Translation, and TTS
-const { FormData, File, fetch } = require('undici');
+// Complete Sarvam API integration: STT, Translation, and TTS using axios
+const axios = require('axios');
+const FormData = require('form-data');
 
 class SarvamClient {
   constructor(apiKey) {
@@ -17,6 +18,12 @@ class SarvamClient {
     
     // TTS model: bulbul:v1 | bulbul:v2
     this.ttsModel = process.env.SARVAM_TTS_MODEL || 'bulbul:v1';
+    
+    // Create axios instance with timeout
+    this.axiosInstance = axios.create({
+      baseURL: this.baseUrl,
+      timeout: 30000
+    });
   }
 
   /**
@@ -28,24 +35,23 @@ class SarvamClient {
   async transcribe(audioBuffer, languageCode = 'hi-IN', mimeType = 'audio/webm') {
     try {
       const fileName = this.getAudioFileName(mimeType);
-
       const formData = new FormData();
-      formData.append('file', new File([audioBuffer], fileName, { type: mimeType }));
+      
+      formData.append('file', audioBuffer, {
+        filename: fileName,
+        contentType: mimeType
+      });
       formData.append('language_code', this.normalizeLanguageCode(languageCode));
       formData.append('model', this.sttModel);
 
-      const res = await fetch(`${this.baseUrl}/speech-to-text`, {
-        method: 'POST',
-        headers: { 'api-subscription-key': this.apiKey },
-        body: formData
+      const response = await this.axiosInstance.post('/speech-to-text', formData, {
+        headers: {
+          'api-subscription-key': this.apiKey,
+          ...formData.getHeaders()
+        }
       });
 
-      if (!res.ok) {
-        const errorText = await res.text().catch(() => '');
-        throw new Error(`Sarvam STT ${res.status} ${res.statusText}: ${errorText}`);
-      }
-
-      const result = await res.json();
+      const result = response.data;
       const transcript = result.transcript || '';
 
       return {
@@ -62,8 +68,9 @@ class SarvamClient {
         }
       };
     } catch (err) {
-      console.error('Sarvam transcription error:', err.message);
-      throw new Error(`Failed to transcribe audio: ${err.message}`);
+      const errorMsg = err.response?.data || err.message;
+      console.error('Sarvam transcription error:', errorMsg);
+      throw new Error(`Failed to transcribe audio: ${JSON.stringify(errorMsg)}`);
     }
   }
 
@@ -80,21 +87,11 @@ class SarvamClient {
         mode: this.toneMode
       };
 
-      const res = await fetch(`${this.baseUrl}/translate`, {
-        method: 'POST',
-        headers: this.headersJson,
-        body: JSON.stringify(payload)
+      const response = await this.axiosInstance.post('/translate', payload, {
+        headers: this.headersJson
       });
 
-      if (!res.ok) {
-        const errorText = await res.text().catch(() => '');
-        console.error(`Sarvam translate error ${res.status}:`, errorText);
-        
-        // Return fallback translation for demo continuity
-        return this.getFallbackTranslation(text, sourceLanguage, targetLanguage);
-      }
-
-      const result = await res.json();
+      const result = response.data;
       return {
         text: result.translated_text || text,
         source_language: sourceLanguage,
@@ -102,7 +99,10 @@ class SarvamClient {
         confidence: result.confidence ?? 0.95
       };
     } catch (err) {
-      console.error('Translation error:', err.message);
+      const errorMsg = err.response?.data || err.message;
+      console.error(`Sarvam translate error ${err.response?.status}:`, errorMsg);
+      
+      // Return fallback translation for demo continuity
       return this.getFallbackTranslation(text, sourceLanguage, targetLanguage);
     }
   }
@@ -127,43 +127,51 @@ class SarvamClient {
         model: options.model || this.ttsModel
       };
 
-      console.log('Sarvam TTS request:', { text: text.substring(0, 50) + '...', languageCode, speaker: payload.speaker });
-
-      const res = await fetch(`${this.baseUrl}/text-to-speech`, {
-        method: 'POST',
-        headers: this.headersJson,
-        body: JSON.stringify(payload)
+      console.log('Sarvam TTS request:', { 
+        text: text.substring(0, 50) + '...', 
+        languageCode, 
+        speaker: payload.speaker 
       });
 
-      if (!res.ok) {
-        const errorText = await res.text().catch(() => '');
-        throw new Error(`Sarvam TTS ${res.status} ${res.statusText}: ${errorText}`);
-      }
+      const response = await this.axiosInstance.post('/text-to-speech', payload, {
+        headers: this.headersJson,
+        responseType: 'arraybuffer'
+      });
 
-      // Handle both binary and JSON responses
-      const contentType = res.headers.get('content-type') || '';
+      // Handle binary audio response
+      const contentType = response.headers['content-type'] || 'audio/mpeg';
       
-      if (contentType.includes('audio/')) {
-        // Direct audio response
-        const audioBuffer = await res.arrayBuffer();
+      if (response.data && response.data.byteLength > 0) {
         return {
-          audio: Buffer.from(audioBuffer),
+          audio: Buffer.from(response.data),
           contentType: contentType
         };
-      } else {
-        // JSON response with base64 audio
-        const result = await res.json();
-        if (result.audio) {
-          return {
-            audio: Buffer.from(result.audio, 'base64'),
-            contentType: 'audio/mpeg'
-          };
-        }
-        throw new Error('No audio data in TTS response');
       }
+      
+      throw new Error('No audio data received from TTS API');
+      
     } catch (err) {
-      console.error('Sarvam TTS error:', err.message);
-      throw new Error(`Failed to generate speech: ${err.message}`);
+      console.error('Sarvam TTS error:', err.response?.data || err.message);
+      
+      // If we got a JSON response instead of audio, try to handle it
+      if (err.response && err.response.data) {
+        try {
+          // Convert arraybuffer to string to check if it's JSON
+          const textData = Buffer.from(err.response.data).toString();
+          const jsonData = JSON.parse(textData);
+          
+          if (jsonData.audio) {
+            return {
+              audio: Buffer.from(jsonData.audio, 'base64'),
+              contentType: 'audio/mpeg'
+            };
+          }
+        } catch (parseErr) {
+          // Not JSON, continue with original error
+        }
+      }
+      
+      throw new Error(`Failed to generate speech: ${err.response?.status} ${err.message}`);
     }
   }
 
@@ -172,11 +180,10 @@ class SarvamClient {
    */
   async getSupportedLanguages() {
     try {
-      const res = await fetch(`${this.baseUrl}/translate/supported-languages`, {
+      const response = await this.axiosInstance.get('/translate/supported-languages', {
         headers: { 'api-subscription-key': this.apiKey }
       });
-      if (!res.ok) throw new Error(`Languages API ${res.status} ${res.statusText}`);
-      return await res.json();
+      return response.data;
     } catch (err) {
       console.error('Error fetching supported languages:', err.message);
       return this.getDefaultLanguages();
