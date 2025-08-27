@@ -5,8 +5,10 @@ const socketIo = require('socket.io');
 const cors = require('cors');
 const path = require('path');
 const multer = require('multer');
-const axios = require('axios');
 require('dotenv').config();
+
+// Import Sarvam client
+const SarvamClient = require('./sarvam_integration');
 
 const app = express();
 const server = http.createServer(app);
@@ -25,204 +27,6 @@ app.use(express.static('public'));
 // Configure multer for audio file uploads
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
-
-// Sarvam API Client
-class SarvamClient {
-    constructor(apiKey) {
-        this.apiKey = apiKey;
-        this.baseUrl = 'https://api.sarvam.ai';
-        this.headers = {
-            'api-subscription-key': apiKey,
-            'Content-Type': 'application/json'
-        };
-    }
-
-    async transcribe(audioBuffer, languageCode) {
-        try {
-            const FormData = require('form-data');
-            const form = new FormData();
-            
-            form.append('file', audioBuffer, {
-                filename: 'audio.wav',
-                contentType: 'audio/wav'
-            });
-            form.append('language_code', this.normalizeLanguageCode(languageCode));
-            form.append('model', 'saarika:v1');
-
-            const response = await axios.post(`${this.baseUrl}/speech-to-text`, form, {
-                headers: {
-                    'api-subscription-key': this.apiKey,
-                    ...form.getHeaders()
-                },
-                timeout: 30000
-            });
-
-            return {
-                transcript: response.data.transcript || '',
-                confidence: response.data.confidence || 0.95,
-                language_code: response.data.language_code || languageCode,
-                diarized_transcript: response.data.diarized_transcript || {
-                    entries: [{
-                        transcript: response.data.transcript || '',
-                        speaker_id: 'speaker_1',
-                        start_time_seconds: 0,
-                        end_time_seconds: 0
-                    }]
-                }
-            };
-
-        } catch (error) {
-            console.error('Sarvam STT error:', {
-                status: error.response?.status,
-                data: error.response?.data,
-                message: error.message
-            });
-            throw new Error(`STT failed: ${error.response?.data?.error?.message || error.message}`);
-        }
-    }
-
-    async translate(text, sourceLanguage, targetLanguage) {
-        try {
-            const payload = {
-                input: text,
-                source_language_code: this.getLanguageCode(sourceLanguage),
-                target_language_code: this.getLanguageCode(targetLanguage),
-                speaker_gender: 'Male',
-                mode: 'formal'
-            };
-
-            const response = await axios.post(`${this.baseUrl}/translate`, payload, {
-                headers: this.headers,
-                timeout: 15000
-            });
-
-            return {
-                text: response.data.translated_text || text,
-                source_language: sourceLanguage,
-                target_language: targetLanguage,
-                confidence: response.data.confidence || 0.95
-            };
-
-        } catch (error) {
-            console.error('Sarvam translate error:', {
-                status: error.response?.status,
-                data: error.response?.data,
-                message: error.message
-            });
-            
-            // Fallback translations for demo
-            const fallbackTranslations = {
-                'Hello': 'नमस्ते',
-                'Thank you': 'धन्यवाद',
-                'How much?': 'कितना?',
-                'कितना पैसा?': 'How much money?',
-                'Rs 3000': 'Rs 3000',
-                'Good morning': 'सुप्रभात',
-                'नमस्ते': 'Hello',
-                'धन्यवाद': 'Thank you'
-            };
-            
-            return {
-                text: fallbackTranslations[text] || `[Translation unavailable: ${text}]`,
-                source_language: sourceLanguage,
-                target_language: targetLanguage,
-                confidence: 0.5
-            };
-        }
-    }
-
-    async generateSpeech(text, languageCode = 'hi-IN') {
-        try {
-            const payload = {
-                text: text,
-                target_language_code: this.normalizeLanguageCode(languageCode),
-                speaker: this.getSpeakerForLanguage(languageCode),
-                pitch: 0,
-                pace: 1.0,
-                loudness: 1.0,
-                speech_sample_rate: 22050,
-                enable_preprocessing: true,
-                model: 'bulbul:v1'
-            };
-
-            console.log('Sarvam TTS request:', payload);
-
-            const response = await axios.post(`${this.baseUrl}/text-to-speech`, payload, {
-                headers: this.headers,
-                responseType: 'arraybuffer',
-                timeout: 30000
-            });
-
-            return {
-                audio: Buffer.from(response.data),
-                contentType: 'audio/mpeg'
-            };
-
-        } catch (error) {
-            console.error('Sarvam TTS error:', {
-                status: error.response?.status,
-                data: error.response?.data,
-                message: error.message
-            });
-            throw new Error(`TTS failed: ${error.response?.data?.error?.message || error.message}`);
-        }
-    }
-
-    // Helper methods
-    normalizeLanguageCode(code) {
-        const codeMap = {
-            'hi-IN': 'hi-IN',
-            'bn-IN': 'bn-IN',
-            'ta-IN': 'ta-IN',
-            'te-IN': 'te-IN',
-            'mr-IN': 'mr-IN',
-            'gu-IN': 'gu-IN',
-            'kn-IN': 'kn-IN',
-            'ml-IN': 'ml-IN',
-            'pa-IN': 'pa-IN',
-            'or-IN': 'od-IN', // Odia mapping
-            'od-IN': 'od-IN',
-            'en-IN': 'en-IN'
-        };
-        return codeMap[code] || 'hi-IN';
-    }
-
-    getLanguageCode(code) {
-        // For translation, use base language codes
-        const baseMap = {
-            'hi-IN': 'hi',
-            'bn-IN': 'bn',
-            'ta-IN': 'ta',
-            'te-IN': 'te',
-            'mr-IN': 'mr',
-            'gu-IN': 'gu',
-            'kn-IN': 'kn',
-            'ml-IN': 'ml',
-            'pa-IN': 'pa',
-            'or-IN': 'od',
-            'od-IN': 'od',
-            'en-IN': 'en'
-        };
-        return baseMap[code] || code.split('-')[0] || 'hi';
-    }
-
-    getSpeakerForLanguage(languageCode) {
-        const speakerMap = {
-            'hi-IN': 'anushka',
-            'bn-IN': 'anushka',
-            'ta-IN': 'anushka',
-            'te-IN': 'anushka',
-            'mr-IN': 'anushka',
-            'gu-IN': 'anushka',
-            'kn-IN': 'anushka',
-            'ml-IN': 'anushka',
-            'pa-IN': 'anushka',
-            'od-IN': 'anushka',
-            'en-IN': 'meera'
-        };
-        return speakerMap[this.normalizeLanguageCode(languageCode)] || 'anushka';
-    }
-}
 
 // Initialize Sarvam client
 const sarvamClient = new SarvamClient(process.env.SARVAM_KEY);
@@ -251,8 +55,13 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.get('/health', (req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+app.get('/health', async (req, res) => {
+    const sarvamOk = await sarvamClient.healthCheck();
+    res.json({ 
+        status: 'ok', 
+        sarvamOk,
+        timestamp: new Date().toISOString() 
+    });
 });
 
 // TTS endpoint using Sarvam
@@ -260,9 +69,11 @@ app.post('/api/tts', async (req, res) => {
     try {
         const { text, language = 'hi-IN' } = req.body;
         
-        if (!text) {
+        if (!text || !text.trim()) {
             return res.status(400).json({ error: 'Text is required' });
         }
+
+        console.log('TTS request:', { text: text.substring(0, 50) + '...', language });
 
         const audioResult = await sarvamClient.generateSpeech(text, language);
         
@@ -275,8 +86,25 @@ app.post('/api/tts', async (req, res) => {
         res.send(audioResult.audio);
         
     } catch (error) {
-        console.error('TTS endpoint error:', error);
+        console.error('TTS endpoint error:', error.message);
         res.status(500).json({ error: 'TTS generation failed' });
+    }
+});
+
+// Get available TTS voices
+app.get('/api/tts/voices', async (req, res) => {
+    try {
+        const voices = [
+            { language: 'hi-IN', speaker: 'anushka' },
+            { language: 'en-IN', speaker: 'meera' },
+            { language: 'bn-IN', speaker: 'anushka' },
+            { language: 'ta-IN', speaker: 'anushka' },
+            { language: 'te-IN', speaker: 'anushka' }
+        ];
+        res.json(voices);
+    } catch (error) {
+        console.error('Error fetching TTS voices:', error);
+        res.status(500).json({ error: 'Failed to fetch voices' });
     }
 });
 
@@ -286,7 +114,7 @@ app.post('/api/generate-room', (req, res) => {
     const roomId = `room_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
     
     activeRooms.set(roomId, {
-        hotelName,
+        hotelName: hotelName || 'Unknown Hotel',
         createdAt: new Date(),
         users: new Set()
     });
@@ -308,9 +136,19 @@ io.on('connection', (socket) => {
     socket.on('join_room', (data) => {
         const { room, role, language = 'hi-IN' } = data;
         
+        // Leave any previous room
+        const prevRoom = userRoles.get(socket.id)?.room;
+        if (prevRoom) {
+            socket.leave(prevRoom);
+            const roomData = activeRooms.get(prevRoom);
+            if (roomData) roomData.users.delete(socket.id);
+        }
+        
+        // Join new room
         socket.join(room);
         userRoles.set(socket.id, { room, role, language });
         
+        // Update room info
         if (!activeRooms.has(room)) {
             activeRooms.set(room, {
                 hotelName: 'Unknown Hotel',
@@ -323,16 +161,25 @@ io.on('connection', (socket) => {
         
         console.log(`User ${socket.id} joined room ${room} as ${role}`);
         
+        // Notify user they joined
         socket.emit('room_joined', { 
             room, 
             role,
             language: languageNames[language] || language
         });
         
+        // Notify others in room
         socket.to(room).emit('user_joined', { 
             role,
             language: languageNames[language] || language,
             userId: socket.id
+        });
+        
+        // Send room stats
+        const roomInfo = activeRooms.get(room);
+        io.to(room).emit('room_stats', {
+            userCount: roomInfo.users.size,
+            hotelName: roomInfo.hotelName
         });
     });
     
@@ -341,7 +188,8 @@ io.on('connection', (socket) => {
             console.log('Processing audio message:', {
                 room: data.room,
                 role: data.role,
-                language: data.language
+                language: data.language,
+                audioDataSize: data.audioData?.length || 0
             });
             
             const userInfo = userRoles.get(socket.id);
@@ -350,19 +198,25 @@ io.on('connection', (socket) => {
                 return;
             }
             
+            // Emit processing status
             io.to(data.room).emit('processing_status', {
                 status: 'transcribing',
                 speaker: data.role
             });
             
+            // Step 1: Transcribe audio
             const audioBuffer = Buffer.from(data.audioData || [], 'base64');
             const transcription = await sarvamClient.transcribe(audioBuffer, data.language);
             
+            console.log('Transcription result:', transcription.transcript);
+            
+            // Emit transcription status
             io.to(data.room).emit('processing_status', {
                 status: 'translating',
                 speaker: data.role
             });
             
+            // Step 2: Translate text
             const sourceLanguage = data.language;
             const targetLanguage = data.role === 'guest' ? 'en-IN' : userInfo.language || 'hi-IN';
             
@@ -372,6 +226,9 @@ io.on('connection', (socket) => {
                 targetLanguage
             );
             
+            console.log('Translation result:', translation.text);
+            
+            // Step 3: Send results to all users in room
             const messageData = {
                 id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
                 timestamp: new Date().toISOString(),
@@ -388,7 +245,7 @@ io.on('connection', (socket) => {
                     languageName: languageNames[targetLanguage] || targetLanguage
                 },
                 confidence: transcription.confidence || 0.95,
-                speakerId: socket.id,
+                speakerId: transcription.diarized_transcript?.entries?.[0]?.speaker_id || socket.id,
                 ttsAvailable: true
             };
             
@@ -396,7 +253,7 @@ io.on('connection', (socket) => {
             io.to(data.room).emit('processing_status', { status: 'complete' });
             
         } catch (error) {
-            console.error('Audio processing error:', error);
+            console.error('Audio processing error:', error.message);
             socket.emit('error', { 
                 message: 'Failed to process audio message',
                 error: error.message 
@@ -420,11 +277,13 @@ io.on('connection', (socket) => {
                 return;
             }
             
+            // Emit processing status
             io.to(data.room).emit('processing_status', {
                 status: 'translating',
                 speaker: data.role
             });
             
+            // Translate text
             const sourceLanguage = data.language || (data.role === 'guest' ? userInfo.language : 'en-IN');
             const targetLanguage = data.role === 'guest' ? 'en-IN' : userInfo.language || 'hi-IN';
             
@@ -434,6 +293,9 @@ io.on('connection', (socket) => {
                 targetLanguage
             );
             
+            console.log('Text translation result:', translation.text);
+            
+            // Send results to all users in room
             const messageData = {
                 id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
                 timestamp: new Date().toISOString(),
@@ -449,7 +311,7 @@ io.on('connection', (socket) => {
                     language: targetLanguage,
                     languageName: languageNames[targetLanguage] || targetLanguage
                 },
-                confidence: 1.0,
+                confidence: 1.0, // Text input has perfect confidence
                 speakerId: socket.id,
                 ttsAvailable: true
             };
@@ -458,12 +320,23 @@ io.on('connection', (socket) => {
             io.to(data.room).emit('processing_status', { status: 'complete' });
             
         } catch (error) {
-            console.error('Text processing error:', error);
+            console.error('Text processing error:', error.message);
             socket.emit('error', { 
                 message: 'Failed to process text message',
                 error: error.message 
             });
             io.to(data.room).emit('processing_status', { status: 'error' });
+        }
+    });
+    
+    socket.on('get_room_info', (data) => {
+        const roomInfo = activeRooms.get(data.room);
+        if (roomInfo) {
+            socket.emit('room_info', {
+                hotelName: roomInfo.hotelName,
+                userCount: roomInfo.users.size,
+                createdAt: roomInfo.createdAt
+            });
         }
     });
     
@@ -474,29 +347,45 @@ io.on('connection', (socket) => {
         if (userInfo) {
             const { room, role } = userInfo;
             
+            // Remove user from room
             if (activeRooms.has(room)) {
                 activeRooms.get(room).users.delete(socket.id);
+                
+                // Notify others
                 socket.to(room).emit('user_left', { role, userId: socket.id });
+                
+                // Send updated room stats
+                const roomInfo = activeRooms.get(room);
+                io.to(room).emit('room_stats', {
+                    userCount: roomInfo.users.size,
+                    hotelName: roomInfo.hotelName
+                });
+                
+                // Clean up empty rooms after 5 minutes
+                if (roomInfo.users.size === 0) {
+                    setTimeout(() => {
+                        if (activeRooms.has(room) && activeRooms.get(room).users.size === 0) {
+                            activeRooms.delete(room);
+                            console.log(`Cleaned up empty room: ${room}`);
+                        }
+                    }, 5 * 60 * 1000);
+                }
             }
             
             userRoles.delete(socket.id);
         }
     });
+    
+    // Handle errors
+    socket.on('error', (error) => {
+        console.error('Socket error:', error);
+    });
 });
 
-// Updated package.json dependencies needed
-app.get('/api/package-deps', (req, res) => {
-    res.json({
-        "dependencies": {
-            "express": "^4.18.2",
-            "socket.io": "^4.7.2",
-            "cors": "^2.8.5",
-            "multer": "^1.4.5-lts.1",
-            "dotenv": "^16.3.1",
-            "axios": "^1.5.0",
-            "form-data": "^4.0.0"
-        }
-    });
+// Error handling middleware
+app.use((err, req, res, next) => {
+    console.error('Server error:', err);
+    res.status(500).json({ error: 'Internal server error' });
 });
 
 // Start server
@@ -508,10 +397,11 @@ server.listen(PORT, () => {
     if (process.env.SARVAM_KEY) {
         console.log('Sarvam API initialized');
     } else {
-        console.log('Warning: SARVAM_KEY not found');
+        console.log('Warning: SARVAM_KEY not found - translations will fail');
     }
 });
 
+// Graceful shutdown
 process.on('SIGTERM', () => {
     console.log('SIGTERM received, shutting down gracefully');
     server.close(() => {
