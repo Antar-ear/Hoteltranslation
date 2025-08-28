@@ -1,386 +1,1246 @@
-// Add this script to your index.html (replace the existing displayMessage and related functions)
-
-// Improved display message function
-function displayMessage(role, data) {
-    const messagesEl = document.getElementById(role + 'Messages');
-    if (!messagesEl) return;
-    
-    const messageEl = document.createElement('div');
-    messageEl.className = `message ${data.speaker}`;
-    
-    // Determine what text to show based on viewer's role
-    let primaryText, secondaryText, primaryLanguage, secondaryLanguage;
-    
-    if (role === 'guest') {
-        // Guest view
-        if (data.speaker === 'guest') {
-            // Guest seeing their own message
-            primaryText = data.original.text;  // Show original (guest language)
-            secondaryText = data.translated.text;  // Show translation (English)
-            primaryLanguage = data.original.language;
-            secondaryLanguage = data.translated.language;
-        } else {
-            // Guest seeing receptionist's message
-            primaryText = data.translated.text;  // Show translation (guest language)
-            secondaryText = data.original.text;  // Show original (English)
-            primaryLanguage = data.translated.language;
-            secondaryLanguage = data.original.language;
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hotel Translation System</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
         }
-    } else if (role === 'receptionist') {
-        // Receptionist view
-        if (data.speaker === 'receptionist') {
-            // Receptionist seeing their own message
-            primaryText = data.original.text;  // Show original (English)
-            secondaryText = data.translated.text;  // Show translation (guest language)
-            primaryLanguage = data.original.language;
-            secondaryLanguage = data.translated.language;
-        } else {
-            // Receptionist seeing guest's message
-            primaryText = data.translated.text;  // Show translation (English)
-            secondaryText = data.original.text;  // Show original (guest language)
-            primaryLanguage = data.translated.language;
-            secondaryLanguage = data.original.language;
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
         }
-    }
-    
-    const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
-    
-    messageEl.innerHTML = `
-        <div class="message-header">
-            ${data.speaker === 'guest' ? '👤 Guest' : '🏨 Receptionist'} 
-            <span style="font-size: 0.8em; color: #666;">(${data.speaker === role ? 'You' : 'Them'})</span>
-        </div>
-        <div class="original-text">${escapeHtml(primaryText)}</div>
-        ${secondaryText && secondaryText !== primaryText ? 
-            `<div class="translated-text">Translation: ${escapeHtml(secondaryText)}</div>` : ''
+        
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
         }
-        <div class="audio-controls">
-            <button class="play-btn" data-text="${escapeHtml(primaryText)}" data-lang="${primaryLanguage}" data-role="${role}">
-                🔊 Play
-            </button>
-            <button class="play-btn stop-btn" style="background: linear-gradient(135deg, #ff6b6b, #ee5a52);">
-                🔇 Stop
-            </button>
-        </div>
-    `;
-    
-    // Add event listeners to buttons
-    const playBtn = messageEl.querySelector('.play-btn[data-text]');
-    const stopBtn = messageEl.querySelector('.stop-btn');
-    
-    if (playBtn) {
-        playBtn.addEventListener('click', function() {
-            const text = this.getAttribute('data-text');
-            const lang = this.getAttribute('data-lang');
-            const role = this.getAttribute('data-role');
-            speakText(text, lang, role);
-        });
-    }
-    
-    if (stopBtn) {
-        stopBtn.addEventListener('click', stopTTS);
-    }
-    
-    messagesEl.appendChild(messageEl);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-    
-    // Auto-play only for incoming messages (not your own)
-    if (ttsEnabled[role] && data.speaker !== role) {
-        // Add a small delay and only play if no other audio is playing
-        setTimeout(() => {
-            if (!currentUtterance || currentUtterance.ended) {
-                speakText(primaryText, primaryLanguage, role);
+        
+        .header {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2em;
+            margin-bottom: 10px;
+            font-weight: 600;
+        }
+        
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
+        
+        .role-selector {
+            padding: 30px;
+            text-align: center;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .role-buttons {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .role-btn {
+            padding: 15px 30px;
+            border: 2px solid #667eea;
+            background: white;
+            color: #667eea;
+            border-radius: 50px;
+            font-size: 1.1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .role-btn:hover {
+            background: #667eea;
+            color: white;
+            transform: translateY(-2px);
+        }
+        
+        .role-btn.active {
+            background: #667eea;
+            color: white;
+        }
+        
+        .main-content {
+            padding: 30px;
+            display: none;
+        }
+        
+        .main-content.active {
+            display: block;
+        }
+        
+        .hotel-setup {
+            text-align: center;
+        }
+        
+        .hotel-input {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #eee;
+            border-radius: 10px;
+            font-size: 1.1em;
+            margin: 20px 0;
+        }
+        
+        .generate-btn {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 50px;
+            font-size: 1.1em;
+            cursor: pointer;
+            transition: transform 0.3s ease;
+        }
+        
+        .generate-btn:hover {
+            transform: translateY(-2px);
+        }
+        
+        .qr-container {
+            margin: 30px 0;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 15px;
+            display: none;
+        }
+        
+        .qr-container.active {
+            display: block;
+        }
+        
+        .translation-interface {
+            text-align: center;
+        }
+        
+        .room-id {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 30px;
+            font-family: monospace;
+            font-size: 1.2em;
+            font-weight: bold;
+        }
+        
+        .record-container {
+            margin: 30px 0;
+        }
+        
+        .record-btn {
+            width: 120px;
+            height: 120px;
+            border: none;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #ff6b6b, #ee5a52);
+            color: white;
+            font-size: 1.2em;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 10px 20px rgba(255, 107, 107, 0.3);
+        }
+        
+        .record-btn:hover {
+            transform: scale(1.05);
+        }
+        
+        .record-btn.recording {
+            background: linear-gradient(135deg, #ff4757, #ff3838);
+            animation: pulse 1s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+        
+        .language-selector {
+            margin: 20px 0;
+        }
+        
+        .language-select {
+            padding: 10px 15px;
+            border: 2px solid #eee;
+            border-radius: 10px;
+            font-size: 1em;
+            width: 200px;
+        }
+        
+        .messages {
+            max-height: 400px;
+            overflow-y: auto;
+            border: 1px solid #eee;
+            border-radius: 15px;
+            padding: 20px;
+            margin: 20px 0;
+            background: #f8f9fa;
+        }
+        
+        .message {
+            margin: 15px 0;
+            padding: 15px;
+            border-radius: 12px;
+            animation: slideIn 0.3s ease;
+        }
+        
+        .message.guest {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+        }
+        
+        .message.receptionist {
+            background: #e8f5e8;
+            border-left: 4px solid #4caf50;
+        }
+        
+        .message-header {
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #555;
+            font-size: 0.9em;
+        }
+        
+        .original-text {
+            font-size: 1.1em;
+            margin-bottom: 8px;
+        }
+        
+        .translated-text {
+            font-style: italic;
+            color: #666;
+        }
+        
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
             }
-        }, 500);
-    }
-}
-
-// Helper function to escape HTML
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
-// Improved TTS function with queue management
-let ttsQueue = [];
-let isPlayingTTS = false;
-
-async function speakText(text, language, role) {
-    if (!ttsEnabled[role] || !text) return;
-    
-    // Add to queue instead of playing immediately
-    ttsQueue.push({ text, language, role });
-    
-    if (!isPlayingTTS) {
-        playNextInQueue();
-    }
-}
-
-async function playNextInQueue() {
-    if (ttsQueue.length === 0) {
-        isPlayingTTS = false;
-        return;
-    }
-    
-    isPlayingTTS = true;
-    const { text, language, role } = ttsQueue.shift();
-    
-    // Check audio permissions first
-    if (!audioPermissionGranted) {
-        showStatus(role, 'Audio permissions required. Please allow microphone and speaker access.', 'error');
-        await requestAudioPermissions(role);
-        if (!audioPermissionGranted) {
-            isPlayingTTS = false;
-            return;
-        }
-    }
-    
-    // Resume audio context if needed
-    if (audioContext && audioContext.state === 'suspended') {
-        try {
-            await audioContext.resume();
-        } catch (error) {
-            console.error('Failed to resume audio context:', error);
-        }
-    }
-    
-    // Stop any current audio
-    stopCurrentAudio();
-    
-    // Show loading status
-    showStatus(role, 'Generating speech...', 'info');
-    
-    try {
-        // Call backend TTS API with timeout
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-        
-        const response = await fetch('/api/tts', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ 
-                text: text,
-                language: language 
-            }),
-            signal: controller.signal
-        });
-        
-        clearTimeout(timeoutId);
-
-        if (!response.ok) {
-            throw new Error(`TTS request failed: ${response.status}`);
-        }
-
-        const audioBlob = await response.blob();
-        const audioUrl = URL.createObjectURL(audioBlob);
-        
-        // Create audio element
-        currentUtterance = new Audio(audioUrl);
-        
-        // Set playback speed
-        const speedSlider = document.getElementById(role + 'Speed');
-        if (speedSlider) {
-            currentUtterance.playbackRate = parseFloat(speedSlider.value);
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
         
-        // Set up event listeners
-        currentUtterance.onended = () => {
-            URL.revokeObjectURL(audioUrl);
-            currentUtterance = null;
-            showStatus(role, '', 'success');
-            // Play next in queue
-            setTimeout(playNextInQueue, 500);
+        .status {
+            padding: 10px;
+            border-radius: 8px;
+            margin: 10px 0;
+            font-weight: 500;
+        }
+        
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        .status.info {
+            background: #cce7ff;
+            color: #004085;
+        }
+        
+        .text-input-container {
+            margin: 20px 0;
+        }
+        
+        .text-input {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #eee;
+            border-radius: 10px;
+            font-size: 1em;
+            resize: vertical;
+            min-height: 80px;
+        }
+        
+        .send-btn {
+            background: linear-gradient(135deg, #4caf50, #45a049);
+            color: white;
+            border: none;
+            padding: 12px 25px;
+            border-radius: 8px;
+            font-size: 1em;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+
+        .audio-controls {
+            margin-top: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 15px;
+        }
+
+        .play-btn {
+            background: linear-gradient(135deg, #2196f3, #1976d2);
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            cursor: pointer;
+            transition: transform 0.2s ease;
+        }
+
+        .play-btn:hover {
+            transform: scale(1.05);
+        }
+
+        .play-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .volume-control {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .volume-slider {
+            width: 80px;
+            height: 4px;
+            border-radius: 2px;
+            background: #ddd;
+            outline: none;
+        }
+
+        .tts-settings {
+            margin: 20px 0;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 10px;
+        }
+
+        .tts-toggle {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .toggle-switch {
+            position: relative;
+            width: 50px;
+            height: 24px;
+            background: #ccc;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: background 0.3s ease;
+        }
+
+        .toggle-switch.active {
+            background: #4caf50;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 20px;
+            height: 20px;
+            background: white;
+            border-radius: 50%;
+            transition: transform 0.3s ease;
+        }
+
+        .toggle-switch.active .toggle-slider {
+            transform: translateX(26px);
+        }
+
+        .speed-control {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .speed-slider {
+            width: 100px;
+        }
+        
+        .connection-status {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            font-weight: bold;
+        }
+        
+        .connection-status.connected {
+            background: #4caf50;
+            color: white;
+        }
+        
+        .connection-status.disconnected {
+            background: #ff4757;
+            color: white;
+        }
+
+        .permission-status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 8px;
+            text-align: center;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="connection-status" id="connectionStatus">Disconnected</div>
+    
+    <div class="container">
+        <div class="header">
+            <h1>Hotel Translation</h1>
+            <p>Real-time communication across languages</p>
+        </div>
+        
+        <div class="role-selector" id="roleSelector">
+            <h3>Select Your Role</h3>
+            <div class="role-buttons">
+                <button class="role-btn" onclick="selectRole('admin')">Admin</button>
+                <button class="role-btn" onclick="selectRole('guest')">Guest</button>
+                <button class="role-btn" onclick="selectRole('receptionist')">Receptionist</button>
+            </div>
+        </div>
+        
+        <!-- Admin Panel -->
+        <div class="main-content" id="adminContent">
+            <div class="hotel-setup">
+                <h3>Hotel Admin Panel</h3>
+                <input type="text" id="hotelName" class="hotel-input" placeholder="Enter hotel name">
+                <br>
+                <button class="generate-btn" onclick="generateQR()">Generate QR Code</button>
+                
+                <div class="qr-container" id="qrContainer">
+                    <h4>Scan QR Code</h4>
+                    <div id="qrCode"></div>
+                    <p><strong>Room ID:</strong> <span id="generatedRoomId"></span></p>
+                    <p><strong>Guest URL:</strong> <a href="#" id="guestUrlLink" target="_blank"><span id="guestUrl"></span></a></p>
+                    <div style="margin-top: 15px; padding: 10px; background: #e8f4fd; border-radius: 8px; font-size: 0.9em; color: #1976d2;">
+                        <strong>Instructions:</strong> Guests can either scan the QR code with their phone camera or click the URL link above
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Guest Interface -->
+        <div class="main-content" id="guestContent">
+            <div class="translation-interface">
+                <h3>Guest Interface</h3>
+                <div class="room-id">Room: <span id="guestRoomId">-</span></div>
+                
+                <div class="language-selector">
+                    <label>Your Language:</label>
+                    <select id="guestLanguage" class="language-select">
+                        <option value="hi-IN">Hindi (हिन्दी)</option>
+                        <option value="bn-IN">Bengali (বাংলা)</option>
+                        <option value="ta-IN">Tamil (தமிழ்)</option>
+                        <option value="te-IN">Telugu (తెలుగు)</option>
+                        <option value="mr-IN">Marathi (मराठी)</option>
+                        <option value="gu-IN">Gujarati (ગુજરાતી)</option>
+                        <option value="kn-IN">Kannada (ಕನ್ನಡ)</option>
+                        <option value="ml-IN">Malayalam (മലയാളം)</option>
+                        <option value="pa-IN">Punjabi (ਪੰਜਾਬੀ)</option>
+                        <option value="or-IN">Odia (ଓଡ଼ିଆ)</option>
+                    </select>
+                </div>
+                
+                <div class="tts-settings">
+                    <div class="tts-toggle">
+                        <label>Audio Playback:</label>
+                        <div class="toggle-switch active" id="guestTtsToggle" onclick="toggleTTS('guest')">
+                            <div class="toggle-slider"></div>
+                        </div>
+                    </div>
+                    <div class="speed-control">
+                        <label>Speed:</label>
+                        <input type="range" class="speed-slider" id="guestSpeed" min="0.5" max="2" step="0.1" value="1">
+                        <span id="guestSpeedValue">1.0x</span>
+                    </div>
+                </div>
+                
+                <div class="record-container">
+                    <button class="record-btn" id="guestRecordBtn" onclick="toggleRecording('guest')">
+                        Speak
+                    </button>
+                </div>
+                
+                <div class="text-input-container">
+                    <textarea id="guestTextInput" class="text-input" placeholder="Or type your message here..."></textarea>
+                    <button class="send-btn" onclick="sendTextMessage('guest')">Send Text</button>
+                </div>
+                
+                <div id="guestStatus"></div>
+                <div class="messages" id="guestMessages"></div>
+            </div>
+        </div>
+        
+        <!-- Receptionist Interface -->
+        <div class="main-content" id="receptionistContent">
+            <div class="translation-interface">
+                <h3>Receptionist Interface</h3>
+                <div class="room-id">Room: <span id="receptionistRoomId">-</span></div>
+                
+                <div class="tts-settings">
+                    <div class="tts-toggle">
+                        <label>Audio Playback:</label>
+                        <div class="toggle-switch active" id="receptionistTtsToggle" onclick="toggleTTS('receptionist')">
+                            <div class="toggle-slider"></div>
+                        </div>
+                    </div>
+                    <div class="speed-control">
+                        <label>Speed:</label>
+                        <input type="range" class="speed-slider" id="receptionistSpeed" min="0.5" max="2" step="0.1" value="1">
+                        <span id="receptionistSpeedValue">1.0x</span>
+                    </div>
+                </div>
+                
+                <div class="record-container">
+                    <button class="record-btn" id="receptionistRecordBtn" onclick="toggleRecording('receptionist')">
+                        Speak (English)
+                    </button>
+                </div>
+                
+                <div class="text-input-container">
+                    <textarea id="receptionistTextInput" class="text-input" placeholder="Type your response in English..."></textarea>
+                    <button class="send-btn" onclick="sendTextMessage('receptionist')">Send Text</button>
+                </div>
+                
+                <div id="receptionistStatus"></div>
+                <div class="messages" id="receptionistMessages"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global variables
+        let socket = null;
+        let currentRole = null;
+        let currentRoom = null;
+        let mediaRecorder = null;
+        let audioChunks = [];
+        let isRecording = false;
+        let recordingStartTime = null;
+        const MIN_RECORDING_DURATION = 1000; // 1 second minimum
+        
+        // TTS variables
+        let ttsEnabled = {
+            guest: true,
+            receptionist: true
         };
+        let currentUtterance = null;
+        let audioPermissionGranted = false;
+        let audioContext = null;
+        let ttsQueue = [];
+        let isPlayingTTS = false;
         
-        currentUtterance.onerror = (error) => {
-            console.error('Audio playback error:', error);
-            URL.revokeObjectURL(audioUrl);
-            currentUtterance = null;
-            showStatus(role, 'Audio playback failed', 'error');
-            // Try next in queue
-            setTimeout(playNextInQueue, 1000);
-        };
-        
-        // Attempt to play audio
-        const playPromise = currentUtterance.play();
-        
-        if (playPromise !== undefined) {
-            playPromise.then(() => {
-                showStatus(role, '', 'success');
-            }).catch(error => {
-                console.error('Audio play error:', error);
-                if (error.name === 'NotAllowedError') {
-                    showStatus(role, 'Click anywhere to enable audio', 'error');
-                    // Add one-time click listener
-                    document.addEventListener('click', function retryAudio() {
-                        if (currentUtterance) {
-                            currentUtterance.play().catch(console.error);
-                        }
-                        document.removeEventListener('click', retryAudio);
-                    }, { once: true });
-                } else {
-                    showStatus(role, 'Audio playback failed', 'error');
-                    setTimeout(playNextInQueue, 1000);
-                }
+        // Initialize socket connection
+        function initSocket() {
+            socket = io();
+            
+            socket.on('connect', () => {
+                console.log('Connected to server');
+                updateConnectionStatus(true);
             });
+            
+            socket.on('disconnect', () => {
+                console.log('Disconnected from server');
+                updateConnectionStatus(false);
+            });
+            
+            socket.on('translation', handleTranslation);
+            socket.on('room_joined', handleRoomJoined);
+            socket.on('user_joined', handleUserJoined);
+            socket.on('processing_status', handleProcessingStatus);
+            socket.on('error', handleSocketError);
         }
         
-    } catch (error) {
-        console.error('TTS error:', error);
-        if (error.name === 'AbortError') {
-            showStatus(role, 'Audio generation timed out', 'error');
-        } else {
-            showStatus(role, 'Audio generation failed', 'error');
+        function updateConnectionStatus(connected) {
+            const statusEl = document.getElementById('connectionStatus');
+            statusEl.textContent = connected ? 'Connected' : 'Disconnected';
+            statusEl.className = 'connection-status ' + (connected ? 'connected' : 'disconnected');
         }
-        // Try next in queue
-        setTimeout(playNextInQueue, 1000);
-    }
-}
-
-function stopCurrentAudio() {
-    if (currentUtterance) {
-        if (currentUtterance.pause) {
-            currentUtterance.pause();
-            currentUtterance.currentTime = 0;
-        }
-        currentUtterance = null;
-    }
-}
-
-function stopTTS() {
-    // Clear the queue
-    ttsQueue = [];
-    isPlayingTTS = false;
-    // Stop current audio
-    stopCurrentAudio();
-}
-
-// Improved recording with minimum duration
-let recordingStartTime = null;
-const MIN_RECORDING_DURATION = 1000; // Minimum 1 second recording
-
-async function toggleRecording(role) {
-    const recordBtn = document.getElementById(role + 'RecordBtn');
-    
-    if (!isRecording) {
-        // Start recording
-        recordingStartTime = Date.now();
         
-        // Check permissions first
-        if (!audioPermissionGranted) {
-            showStatus(role, 'Microphone permission required', 'error');
-            await requestAudioPermissions(role);
-            if (!audioPermissionGranted) {
+        function selectRole(role) {
+            currentRole = role;
+            
+            // Update active button
+            document.querySelectorAll('.role-btn').forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+            
+            // Hide role selector and show appropriate content
+            document.getElementById('roleSelector').style.display = 'none';
+            document.querySelectorAll('.main-content').forEach(content => content.classList.remove('active'));
+            document.getElementById(role + 'Content').classList.add('active');
+            
+            // Request audio permissions when role is selected
+            requestAudioPermissions(role);
+            
+            // Initialize socket connection
+            if (!socket) {
+                initSocket();
+            }
+            
+            // Handle room joining based on role
+            if (role === 'guest' || role === 'receptionist') {
+                const urlParams = new URLSearchParams(window.location.search);
+                const roomId = urlParams.get('room');
+                if (roomId) {
+                    joinRoom(roomId);
+                } else if (role === 'guest') {
+                    showStatus(role, 'Please scan QR code or use the link provided', 'error');
+                } else {
+                    // Receptionist can enter room ID manually
+                    const roomId = prompt('Enter Room ID:');
+                    if (roomId) {
+                        joinRoom(roomId);
+                    }
+                }
+            }
+        }
+        
+        // Request audio permissions
+        async function requestAudioPermissions(role) {
+            try {
+                if (role === 'guest' || role === 'receptionist') {
+                    showStatus(role, 'Requesting microphone and speaker permissions...', 'info');
+                    
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    stream.getTracks().forEach(track => track.stop());
+                    
+                    if (!audioContext) {
+                        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    }
+                    
+                    if (audioContext.state === 'suspended') {
+                        await audioContext.resume();
+                    }
+                    
+                    audioPermissionGranted = true;
+                    showStatus(role, 'Audio permissions granted', 'success');
+                    updatePermissionStatus(role, true);
+                }
+            } catch (error) {
+                console.error('Audio permission error:', error);
+                audioPermissionGranted = false;
+                showStatus(role, 'Audio permissions denied - some features may not work', 'error');
+                updatePermissionStatus(role, false);
+            }
+        }
+        
+        function updatePermissionStatus(role, granted) {
+            const statusContainer = document.getElementById(role + 'Content');
+            let permissionIndicator = statusContainer.querySelector('.permission-status');
+            
+            if (!permissionIndicator) {
+                permissionIndicator = document.createElement('div');
+                permissionIndicator.className = 'permission-status';
+                const firstChild = statusContainer.querySelector('.translation-interface');
+                if (firstChild) {
+                    statusContainer.insertBefore(permissionIndicator, firstChild);
+                } else {
+                    statusContainer.appendChild(permissionIndicator);
+                }
+            }
+            
+            if (granted) {
+                permissionIndicator.style.background = '#d4edda';
+                permissionIndicator.style.color = '#155724';
+                permissionIndicator.innerHTML = '🎤 🔊 Audio permissions granted';
+            } else {
+                permissionIndicator.style.background = '#f8d7da';
+                permissionIndicator.style.color = '#721c24';
+                permissionIndicator.innerHTML = '⚠️ Audio permissions needed - Click to retry';
+                permissionIndicator.style.cursor = 'pointer';
+                permissionIndicator.onclick = () => requestAudioPermissions(role);
+            }
+        }
+        
+        // Generate QR code
+        function generateQR() {
+            const hotelName = document.getElementById('hotelName').value.trim();
+            if (!hotelName) {
+                alert('Please enter a hotel name');
                 return;
             }
+            
+            fetch('/api/generate-room', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ hotelName })
+            })
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('qrContainer').classList.add('active');
+                document.getElementById('generatedRoomId').textContent = data.roomId;
+                document.getElementById('guestUrl').textContent = data.guestUrl;
+                document.getElementById('guestUrlLink').href = data.guestUrl;
+                
+                generateQRCode(data.guestUrl, 'qrCode');
+                currentRoom = data.roomId;
+            })
+            .catch(error => {
+                console.error('Error generating room:', error);
+                alert('Failed to generate QR code');
+            });
         }
         
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ 
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
-                    sampleRate: 44100
+        function generateQRCode(text, elementId) {
+            const qrContainer = document.getElementById(elementId);
+            qrContainer.innerHTML = '';
+            
+            try {
+                const qr = qrcode(0, 'M');
+                qr.addData(text);
+                qr.make();
+                
+                const qrImage = qr.createImgTag(4, 8);
+                qrContainer.innerHTML = qrImage;
+                
+                const img = qrContainer.querySelector('img');
+                if (img) {
+                    img.style.border = '10px solid white';
+                    img.style.borderRadius = '10px';
+                    img.style.boxShadow = '0 4px 8px rgba(0,0,0,0.1)';
+                    img.style.display = 'block';
+                    img.style.margin = '0 auto';
+                }
+            } catch (error) {
+                console.error('QR Code generation error:', error);
+                qrContainer.innerHTML = '<p>QR Code generation failed</p>';
+            }
+        }
+        
+        function joinRoom(roomId) {
+            currentRoom = roomId;
+            
+            if (currentRole === 'guest') {
+                document.getElementById('guestRoomId').textContent = roomId;
+            } else if (currentRole === 'receptionist') {
+                document.getElementById('receptionistRoomId').textContent = roomId;
+            }
+            
+            const language = currentRole === 'guest' ? 
+                document.getElementById('guestLanguage').value : 'en-IN';
+                
+            socket.emit('join_room', { room: roomId, role: currentRole, language });
+            showStatus(currentRole, 'Connecting to room...', 'info');
+        }
+        
+        function handleRoomJoined(data) {
+            showStatus(currentRole, `Connected to room: ${data.room}`, 'success');
+        }
+        
+        function handleUserJoined(data) {
+            showStatus(currentRole, `${data.role} joined the conversation`, 'info');
+        }
+        
+        function handleProcessingStatus(data) {
+            const statusText = {
+                'transcribing': 'Converting speech to text...',
+                'translating': 'Translating...',
+                'complete': 'Translation complete!',
+                'error': data.message || 'Processing failed'
+            };
+            
+            const statusType = data.status === 'error' ? 'error' : 'info';
+            if (data.status !== 'complete') {
+                showStatus(currentRole, statusText[data.status] || 'Processing...', statusType);
+            }
+        }
+        
+        function handleSocketError(error) {
+            showStatus(currentRole, `Error: ${error.message}`, 'error');
+        }
+        
+        function handleTranslation(data) {
+            displayMessage('guest', data);
+            displayMessage('receptionist', data);
+        }
+        
+        function displayMessage(role, data) {
+            const messagesEl = document.getElementById(role + 'Messages');
+            if (!messagesEl) return;
+            
+            const messageEl = document.createElement('div');
+            messageEl.className = `message ${data.speaker}`;
+            
+            let primaryText, secondaryText, primaryLanguage, secondaryLanguage;
+            
+            if (role === 'guest') {
+                if (data.speaker === 'guest') {
+                    primaryText = data.original.text;
+                    secondaryText = data.translated.text;
+                    primaryLanguage = data.original.language;
+                    secondaryLanguage = data.translated.language;
+                } else {
+                    primaryText = data.translated.text;
+                    secondaryText = data.original.text;
+                    primaryLanguage = data.translated.language;
+                    secondaryLanguage = data.original.language;
+                }
+            } else {
+                if (data.speaker === 'receptionist') {
+                    primaryText = data.original.text;
+                    secondaryText = data.translated.text;
+                    primaryLanguage = data.original.language;
+                    secondaryLanguage = data.translated.language;
+                } else {
+                    primaryText = data.translated.text;
+                    secondaryText = data.original.text;
+                    primaryLanguage = data.translated.language;
+                    secondaryLanguage = data.original.language;
+                }
+            }
+            
+            messageEl.innerHTML = `
+                <div class="message-header">
+                    ${data.speaker === 'guest' ? '👤 Guest' : '🏨 Receptionist'} 
+                    <span style="font-size: 0.8em; color: #666;">(${data.speaker === role ? 'You' : 'Them'})</span>
+                </div>
+                <div class="original-text">${escapeHtml(primaryText)}</div>
+                ${secondaryText && secondaryText !== primaryText ? 
+                    `<div class="translated-text">Translation: ${escapeHtml(secondaryText)}</div>` : ''
+                }
+                <div class="audio-controls">
+                    <button class="play-btn" data-text="${escapeHtml(primaryText)}" data-lang="${primaryLanguage}" data-role="${role}">
+                        🔊 Play
+                    </button>
+                    <button class="play-btn stop-btn" style="background: linear-gradient(135deg, #ff6b6b, #ee5a52);">
+                        🔇 Stop
+                    </button>
+                </div>
+            `;
+            
+            const playBtn = messageEl.querySelector('.play-btn[data-text]');
+            const stopBtn = messageEl.querySelector('.stop-btn');
+            
+            if (playBtn) {
+                playBtn.addEventListener('click', function() {
+                    const text = this.getAttribute('data-text');
+                    const lang = this.getAttribute('data-lang');
+                    const role = this.getAttribute('data-role');
+                    speakText(text, lang, role);
+                });
+            }
+            
+            if (stopBtn) {
+                stopBtn.addEventListener('click', stopTTS);
+            }
+            
+            messagesEl.appendChild(messageEl);
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+            
+            // Auto-play for incoming messages
+            if (ttsEnabled[role] && data.speaker !== role) {
+                setTimeout(() => {
+                    if (!currentUtterance || currentUtterance.ended) {
+                        speakText(primaryText, primaryLanguage, role);
+                    }
+                }, 500);
+            }
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        function toggleTTS(role) {
+            ttsEnabled[role] = !ttsEnabled[role];
+            const toggle = document.getElementById(role + 'TtsToggle');
+            
+            if (ttsEnabled[role]) {
+                toggle.classList.add('active');
+            } else {
+                toggle.classList.remove('active');
+                stopTTS();
+            }
+        }
+        
+        async function speakText(text, language, role) {
+            if (!ttsEnabled[role] || !text) return;
+            
+            ttsQueue.push({ text, language, role });
+            
+            if (!isPlayingTTS) {
+                playNextInQueue();
+            }
+        }
+        
+        async function playNextInQueue() {
+            if (ttsQueue.length === 0) {
+                isPlayingTTS = false;
+                return;
+            }
+            
+            isPlayingTTS = true;
+            const { text, language, role } = ttsQueue.shift();
+            
+            if (!audioPermissionGranted) {
+                showStatus(role, 'Audio permissions required', 'error');
+                await requestAudioPermissions(role);
+                if (!audioPermissionGranted) {
+                    isPlayingTTS = false;
+                    return;
+                }
+            }
+            
+            if (audioContext && audioContext.state === 'suspended') {
+                try {
+                    await audioContext.resume();
+                } catch (error) {
+                    console.error('Failed to resume audio context:', error);
+                }
+            }
+            
+            stopCurrentAudio();
+            
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 10000);
+                
+                const response = await fetch('/api/tts', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ 
+                        text: text,
+                        language: language 
+                    }),
+                    signal: controller.signal
+                });
+                
+                clearTimeout(timeoutId);
+
+                if (!response.ok) {
+                    throw new Error(`TTS request failed: ${response.status}`);
+                }
+
+                const audioBlob = await response.blob();
+                const audioUrl = URL.createObjectURL(audioBlob);
+                
+                currentUtterance = new Audio(audioUrl);
+                
+                const speedSlider = document.getElementById(role + 'Speed');
+                if (speedSlider) {
+                    currentUtterance.playbackRate = parseFloat(speedSlider.value);
+                }
+                
+                currentUtterance.onended = () => {
+                    URL.revokeObjectURL(audioUrl);
+                    currentUtterance = null;
+                    setTimeout(playNextInQueue, 500);
+                };
+                
+                currentUtterance.onerror = (error) => {
+                    console.error('Audio playback error:', error);
+                    URL.revokeObjectURL(audioUrl);
+                    currentUtterance = null;
+                    setTimeout(playNextInQueue, 1000);
+                };
+                
+                const playPromise = currentUtterance.play();
+                
+                if (playPromise !== undefined) {
+                    playPromise.catch(error => {
+                        console.error('Audio play error:', error);
+                        if (error.name === 'NotAllowedError') {
+                            document.addEventListener('click', function retryAudio() {
+                                if (currentUtterance) {
+                                    currentUtterance.play().catch(console.error);
+                                }
+                            }, { once: true });
+                        } else {
+                            setTimeout(playNextInQueue, 1000);
+                        }
+                    });
+                }
+                
+            } catch (error) {
+                console.error('TTS error:', error);
+                setTimeout(playNextInQueue, 1000);
+            }
+        }
+        
+        function stopCurrentAudio() {
+            if (currentUtterance) {
+                if (currentUtterance.pause) {
+                    currentUtterance.pause();
+                    currentUtterance.currentTime = 0;
+                }
+                currentUtterance = null;
+            }
+        }
+        
+        function stopTTS() {
+            ttsQueue = [];
+            isPlayingTTS = false;
+            stopCurrentAudio();
+        }
+        
+        function showStatus(role, message, type) {
+            const statusEl = document.getElementById(role + 'Status');
+            if (!statusEl) return;
+            
+            statusEl.innerHTML = message ? `<div class="status ${type}">${message}</div>` : '';
+            if (message) {
+                setTimeout(() => statusEl.innerHTML = '', 5000);
+            }
+        }
+        
+        async function toggleRecording(role) {
+            const recordBtn = document.getElementById(role + 'RecordBtn');
+            
+            if (!isRecording) {
+                recordingStartTime = Date.now();
+                
+                if (!audioPermissionGranted) {
+                    showStatus(role, 'Microphone permission required', 'error');
+                    await requestAudioPermissions(role);
+                    if (!audioPermissionGranted) {
+                        return;
+                    }
+                }
+                
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ 
+                        audio: {
+                            echoCancellation: true,
+                            noiseSuppression: true,
+                            autoGainControl: true,
+                            sampleRate: 44100
+                        }
+                    });
+                    
+                    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' :
+                                   MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' :
+                                   MediaRecorder.isTypeSupported('audio/ogg;codecs=opus') ? 'audio/ogg;codecs=opus' :
+                                   'audio/ogg';
+                    
+                    mediaRecorder = new MediaRecorder(stream, { mimeType });
+                    audioChunks = [];
+                    
+                    mediaRecorder.ondataavailable = event => {
+                        if (event.data.size > 0) {
+                            audioChunks.push(event.data);
+                        }
+                    };
+                    
+                    mediaRecorder.onstop = () => {
+                        const audioBlob = new Blob(audioChunks, { type: mimeType });
+                        
+                        const duration = Date.now() - recordingStartTime;
+                        if (duration < MIN_RECORDING_DURATION) {
+                            showStatus(role, 'Recording too short. Please speak for at least 1 second.', 'error');
+                        } else {
+                            processAudio(audioBlob, role);
+                        }
+                        
+                        stream.getTracks().forEach(track => track.stop());
+                        recordingStartTime = null;
+                    };
+                    
+                    mediaRecorder.onerror = (event) => {
+                        console.error('MediaRecorder error:', event.error);
+                        showStatus(role, 'Recording failed', 'error');
+                        stream.getTracks().forEach(track => track.stop());
+                        recordingStartTime = null;
+                    };
+                    
+                    mediaRecorder.start(100);
+                    isRecording = true;
+                    recordBtn.classList.add('recording');
+                    recordBtn.textContent = 'Recording...';
+                    showStatus(role, 'Recording... Click again to stop', 'info');
+                    
+                } catch (error) {
+                    console.error('Recording permission error:', error);
+                    if (error.name === 'NotAllowedError') {
+                        showStatus(role, 'Microphone access denied', 'error');
+                        audioPermissionGranted = false;
+                        updatePermissionStatus(role, false);
+                    } else {
+                        showStatus(role, `Recording failed: ${error.message}`, 'error');
+                    }
+                    recordingStartTime = null;
+                }
+            } else {
+                if (mediaRecorder && mediaRecorder.state === 'recording') {
+                    mediaRecorder.stop();
+                }
+                isRecording = false;
+                recordBtn.classList.remove('recording');
+                recordBtn.textContent = role === 'guest' ? 'Speak' : 'Speak (English)';
+                showStatus(role, 'Processing...', 'info');
+            }
+        }
+        
+        function processAudio(audioBlob, role) {
+            showStatus(role, 'Processing audio...', 'info');
+            
+            const language = role === 'guest' ? 
+                document.getElementById('guestLanguage').value : 'en-IN';
+            
+            const reader = new FileReader();
+            reader.onload = function() {
+                const audioData = reader.result.split(',')[1];
+                
+                socket.emit('audio_message', {
+                    room: currentRoom,
+                    role: role,
+                    language: language,
+                    audioData: audioData
+                });
+            };
+            reader.readAsDataURL(audioBlob);
+        }
+        
+        let textInputTimeout = {};
+        
+        function sendTextMessage(role) {
+            if (textInputTimeout[role]) {
+                clearTimeout(textInputTimeout[role]);
+            }
+            
+            const textInput = document.getElementById(role + 'TextInput');
+            const text = textInput.value.trim();
+            
+            if (!text) return;
+            
+            textInputTimeout[role] = setTimeout(() => {
+                const language = role === 'guest' ? 
+                    document.getElementById('guestLanguage').value : 'en-IN';
+                
+                socket.emit('text_message', {
+                    room: currentRoom,
+                    role: role,
+                    language: language,
+                    text: text
+                });
+                
+                textInput.value = '';
+                showStatus(role, 'Message sent!', 'success');
+            }, 300);
+        }
+        
+        // Initialize app
+        document.addEventListener('DOMContentLoaded', () => {
+            updateConnectionStatus(false);
+            
+            ['guest', 'receptionist'].forEach(role => {
+                const speedSlider = document.getElementById(role + 'Speed');
+                const speedValue = document.getElementById(role + 'SpeedValue');
+                
+                if (speedSlider && speedValue) {
+                    speedSlider.addEventListener('input', (e) => {
+                        speedValue.textContent = parseFloat(e.target.value).toFixed(1) + 'x';
+                    });
                 }
             });
             
-            // Check for supported MIME types
-            const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' :
-                           MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' :
-                           MediaRecorder.isTypeSupported('audio/ogg;codecs=opus') ? 'audio/ogg;codecs=opus' :
-                           'audio/ogg';
+            checkInitialPermissions();
             
-            mediaRecorder = new MediaRecorder(stream, { mimeType });
-            audioChunks = [];
-            
-            mediaRecorder.ondataavailable = event => {
-                if (event.data.size > 0) {
-                    audioChunks.push(event.data);
-                }
-            };
-            
-            mediaRecorder.onstop = () => {
-                const audioBlob = new Blob(audioChunks, { type: mimeType });
-                
-                // Check recording duration
-                const duration = Date.now() - recordingStartTime;
-                if (duration < MIN_RECORDING_DURATION) {
-                    showStatus(role, 'Recording too short. Please speak for at least 1 second.', 'error');
-                } else {
-                    processAudio(audioBlob, role);
-                }
-                
-                stream.getTracks().forEach(track => track.stop());
-                recordingStartTime = null;
-            };
-            
-            mediaRecorder.onerror = (event) => {
-                console.error('MediaRecorder error:', event.error);
-                showStatus(role, 'Recording failed', 'error');
-                stream.getTracks().forEach(track => track.stop());
-                recordingStartTime = null;
-            };
-            
-            mediaRecorder.start(100); // Record in 100ms chunks for smoother processing
-            isRecording = true;
-            recordBtn.classList.add('recording');
-            recordBtn.textContent = 'Recording...';
-            showStatus(role, 'Recording... Click again to stop', 'info');
-            
-        } catch (error) {
-            console.error('Recording permission error:', error);
-            if (error.name === 'NotAllowedError') {
-                showStatus(role, 'Microphone access denied. Please allow permissions.', 'error');
-                audioPermissionGranted = false;
-                updatePermissionStatus(role, false);
-            } else {
-                showStatus(role, `Recording failed: ${error.message}`, 'error');
+            const urlParams = new URLSearchParams(window.location.search);
+            const roomId = urlParams.get('room');
+            if (roomId) {
+                document.querySelector('.role-btn[onclick="selectRole(\'guest\')"]').style.display = 'inline-block';
+                document.querySelector('.role-btn[onclick="selectRole(\'receptionist\')"]').style.display = 'inline-block';
+                document.querySelector('.role-btn[onclick="selectRole(\'admin\')"]').style.display = 'none';
             }
-            recordingStartTime = null;
-        }
-    } else {
-        // Stop recording
-        if (mediaRecorder && mediaRecorder.state === 'recording') {
-            mediaRecorder.stop();
-        }
-        isRecording = false;
-        recordBtn.classList.remove('recording');
-        recordBtn.textContent = role === 'guest' ? 'Speak' : 'Speak (English)';
-        showStatus(role, 'Processing...', 'info');
-    }
-}
-
-// Debounced text input for better performance
-let textInputTimeout = {};
-
-function sendTextMessage(role) {
-    // Clear any pending timeout
-    if (textInputTimeout[role]) {
-        clearTimeout(textInputTimeout[role]);
-    }
-    
-    const textInput = document.getElementById(role + 'TextInput');
-    const text = textInput.value.trim();
-    
-    if (!text) return;
-    
-    // Add small delay to prevent rapid submissions
-    textInputTimeout[role] = setTimeout(() => {
-        const language = role === 'guest' ? 
-            document.getElementById('guestLanguage').value : 'en-IN';
-        
-        socket.emit('text_message', {
-            room: currentRoom,
-            role: role,
-            language: language,
-            text: text
+            
+            // Handle language change for guest
+            const guestLanguageSelect = document.getElementById('guestLanguage');
+            if (guestLanguageSelect) {
+                guestLanguageSelect.addEventListener('change', function() {
+                    if (socket && currentRoom && currentRole === 'guest') {
+                        socket.emit('join_room', { 
+                            room: currentRoom, 
+                            role: 'guest', 
+                            language: this.value 
+                        });
+                        showStatus('guest', `Language changed to ${this.options[this.selectedIndex].text}`, 'success');
+                    }
+                });
+            }
         });
         
-        textInput.value = '';
-        showStatus(role, 'Message sent!', 'success');
-    }, 300);
-}
+        async function checkInitialPermissions() {
+            try {
+                const permissions = await navigator.permissions.query({ name: 'microphone' });
+                
+                if (permissions.state === 'granted') {
+                    if (!audioContext) {
+                        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    }
+                    audioPermissionGranted = true;
+                }
+                
+                permissions.addEventListener('change', () => {
+                    audioPermissionGranted = permissions.state === 'granted';
+                    if (currentRole) {
+                        updatePermissionStatus(currentRole, audioPermissionGranted);
+                    }
+                });
+                
+            } catch (error) {
+                console.log('Permission API not supported');
+            }
+        }
+        
+        document.addEventListener('click', function unlockAudio() {
+            if (audioContext && audioContext.state === 'suspended') {
+                audioContext.resume().catch(console.error);
+            }
+        }, { once: true });
+        
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' && event.ctrlKey) {
+                if (event.target.id === 'guestTextInput') {
+                    sendTextMessage('guest');
+                } else if (event.target.id === 'receptionistTextInput') {
+                    sendTextMessage('receptionist');
+                }
+            }
+        });
+    </script>
+</body>
+</html>
