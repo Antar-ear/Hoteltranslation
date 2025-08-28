@@ -1,4 +1,4 @@
-// server.js
+// server.js - FIXED VERSION
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
@@ -47,8 +47,23 @@ const languageNames = {
     'ml-IN': 'Malayalam',
     'pa-IN': 'Punjabi',
     'or-IN': 'Odia',
+    'od-IN': 'Odia',  // Added od-IN mapping
     'en-IN': 'English'
 };
+
+// Helper function to get the guest's language in a room
+function getGuestLanguageInRoom(room) {
+    const roomData = activeRooms.get(room);
+    if (!roomData) return 'hi-IN'; // Default to Hindi
+    
+    for (const userId of roomData.users) {
+        const userInfo = userRoles.get(userId);
+        if (userInfo && userInfo.role === 'guest') {
+            return userInfo.language || 'hi-IN';
+        }
+    }
+    return 'hi-IN'; // Default if no guest found
+}
 
 // Routes
 app.get('/', (req, res) => {
@@ -73,7 +88,10 @@ app.post('/api/tts', async (req, res) => {
             return res.status(400).json({ error: 'Text is required' });
         }
 
-        console.log('TTS request:', { text: text.substring(0, 50) + '...', language });
+        console.log('TTS request:', { 
+            text: text.substring(0, 50) + (text.length > 50 ? '...' : ''), 
+            language 
+        });
 
         const audioResult = await sarvamClient.generateSpeech(text, language);
         
@@ -116,7 +134,8 @@ app.post('/api/generate-room', (req, res) => {
     activeRooms.set(roomId, {
         hotelName: hotelName || 'Unknown Hotel',
         createdAt: new Date(),
-        users: new Set()
+        users: new Set(),
+        guestLanguage: null  // Track guest language for the room
     });
     
     const baseUrl = `${req.protocol}://${req.get('host')}`;
@@ -146,40 +165,50 @@ io.on('connection', (socket) => {
         
         // Join new room
         socket.join(room);
-        userRoles.set(socket.id, { room, role, language });
+        
+        // Store user info with proper language
+        const userLanguage = role === 'receptionist' ? 'en-IN' : language;
+        userRoles.set(socket.id, { room, role, language: userLanguage });
         
         // Update room info
         if (!activeRooms.has(room)) {
             activeRooms.set(room, {
                 hotelName: 'Unknown Hotel',
                 createdAt: new Date(),
-                users: new Set()
+                users: new Set(),
+                guestLanguage: null
             });
         }
         
-        activeRooms.get(room).users.add(socket.id);
+        const roomData = activeRooms.get(room);
+        roomData.users.add(socket.id);
         
-        console.log(`User ${socket.id} joined room ${room} as ${role}`);
+        // Track guest language for the room
+        if (role === 'guest') {
+            roomData.guestLanguage = userLanguage;
+        }
+        
+        console.log(`User ${socket.id} joined room ${room} as ${role} with language ${userLanguage}`);
         
         // Notify user they joined
         socket.emit('room_joined', { 
             room, 
             role,
-            language: languageNames[language] || language
+            language: languageNames[userLanguage] || userLanguage
         });
         
         // Notify others in room
         socket.to(room).emit('user_joined', { 
             role,
-            language: languageNames[language] || language,
+            language: languageNames[userLanguage] || userLanguage,
             userId: socket.id
         });
         
         // Send room stats
-        const roomInfo = activeRooms.get(room);
         io.to(room).emit('room_stats', {
-            userCount: roomInfo.users.size,
-            hotelName: roomInfo.hotelName
+            userCount: roomData.users.size,
+            hotelName: roomData.hotelName,
+            guestLanguage: roomData.guestLanguage
         });
     });
     
@@ -210,15 +239,32 @@ io.on('connection', (socket) => {
             
             console.log('Transcription result:', transcription.transcript);
             
+            if (!transcription.transcript || transcription.transcript.trim() === '') {
+                console.log('Empty transcription, skipping translation');
+                io.to(data.room).emit('processing_status', { status: 'error', message: 'No speech detected' });
+                return;
+            }
+            
             // Emit transcription status
             io.to(data.room).emit('processing_status', {
                 status: 'translating',
                 speaker: data.role
             });
             
-            // Step 2: Translate text
-            const sourceLanguage = data.language;
-            const targetLanguage = data.role === 'guest' ? 'en-IN' : userInfo.language || 'hi-IN';
+            // Step 2: Determine translation direction
+            let sourceLanguage, targetLanguage;
+            
+            if (data.role === 'guest') {
+                // Guest speaking: translate from guest language to English
+                sourceLanguage = data.language || userInfo.language;
+                targetLanguage = 'en-IN';
+            } else {
+                // Receptionist speaking: translate from English to guest's language
+                sourceLanguage = 'en-IN';
+                targetLanguage = getGuestLanguageInRoom(data.room);
+            }
+            
+            console.log(`Translation direction: ${sourceLanguage} -> ${targetLanguage}`);
             
             const translation = await sarvamClient.translate(
                 transcription.transcript,
@@ -245,7 +291,7 @@ io.on('connection', (socket) => {
                     languageName: languageNames[targetLanguage] || targetLanguage
                 },
                 confidence: transcription.confidence || 0.95,
-                speakerId: transcription.diarized_transcript?.entries?.[0]?.speaker_id || socket.id,
+                speakerId: socket.id,
                 ttsAvailable: true
             };
             
@@ -258,7 +304,10 @@ io.on('connection', (socket) => {
                 message: 'Failed to process audio message',
                 error: error.message 
             });
-            io.to(data.room).emit('processing_status', { status: 'error' });
+            io.to(data.room).emit('processing_status', { 
+                status: 'error',
+                message: error.message 
+            });
         }
     });
     
@@ -283,9 +332,20 @@ io.on('connection', (socket) => {
                 speaker: data.role
             });
             
-            // Translate text
-            const sourceLanguage = data.language || (data.role === 'guest' ? userInfo.language : 'en-IN');
-            const targetLanguage = data.role === 'guest' ? 'en-IN' : userInfo.language || 'hi-IN';
+            // Determine translation direction
+            let sourceLanguage, targetLanguage;
+            
+            if (data.role === 'guest') {
+                // Guest typing: translate from guest language to English
+                sourceLanguage = data.language || userInfo.language;
+                targetLanguage = 'en-IN';
+            } else {
+                // Receptionist typing: translate from English to guest's language
+                sourceLanguage = 'en-IN';
+                targetLanguage = getGuestLanguageInRoom(data.room);
+            }
+            
+            console.log(`Text translation direction: ${sourceLanguage} -> ${targetLanguage}`);
             
             const translation = await sarvamClient.translate(
                 data.text,
@@ -325,7 +385,10 @@ io.on('connection', (socket) => {
                 message: 'Failed to process text message',
                 error: error.message 
             });
-            io.to(data.room).emit('processing_status', { status: 'error' });
+            io.to(data.room).emit('processing_status', { 
+                status: 'error',
+                message: error.message 
+            });
         }
     });
     
@@ -335,7 +398,8 @@ io.on('connection', (socket) => {
             socket.emit('room_info', {
                 hotelName: roomInfo.hotelName,
                 userCount: roomInfo.users.size,
-                createdAt: roomInfo.createdAt
+                createdAt: roomInfo.createdAt,
+                guestLanguage: roomInfo.guestLanguage
             });
         }
     });
@@ -349,20 +413,26 @@ io.on('connection', (socket) => {
             
             // Remove user from room
             if (activeRooms.has(room)) {
-                activeRooms.get(room).users.delete(socket.id);
+                const roomData = activeRooms.get(room);
+                roomData.users.delete(socket.id);
+                
+                // Clear guest language if guest leaves
+                if (role === 'guest') {
+                    roomData.guestLanguage = null;
+                }
                 
                 // Notify others
                 socket.to(room).emit('user_left', { role, userId: socket.id });
                 
                 // Send updated room stats
-                const roomInfo = activeRooms.get(room);
                 io.to(room).emit('room_stats', {
-                    userCount: roomInfo.users.size,
-                    hotelName: roomInfo.hotelName
+                    userCount: roomData.users.size,
+                    hotelName: roomData.hotelName,
+                    guestLanguage: roomData.guestLanguage
                 });
                 
                 // Clean up empty rooms after 5 minutes
-                if (roomInfo.users.size === 0) {
+                if (roomData.users.size === 0) {
                     setTimeout(() => {
                         if (activeRooms.has(room) && activeRooms.get(room).users.size === 0) {
                             activeRooms.delete(room);
@@ -396,6 +466,9 @@ server.listen(PORT, () => {
     
     if (process.env.SARVAM_KEY) {
         console.log('Sarvam API initialized');
+        sarvamClient.healthCheck().then(ok => {
+            console.log(`Sarvam API health check: ${ok ? 'OK' : 'Failed'}`);
+        });
     } else {
         console.log('Warning: SARVAM_KEY not found - translations will fail');
     }
